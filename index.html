@@ -35,6 +35,11 @@
             <button type="button" data-source="live" aria-pressed="false"><i data-icon="video"></i> دوربین</button>
             <button type="button" data-source="photo" aria-pressed="false"><i data-icon="image"></i> عکس</button>
           </div>
+          <div class="frames" role="group" aria-label="قاب پرو">
+            <button type="button" data-frame="full" aria-pressed="true"><i data-icon="body"></i> تمام‌قد</button>
+            <button type="button" data-frame="upper" aria-pressed="false"><i data-icon="upper"></i> بالاتنه</button>
+            <button type="button" data-frame="face" aria-pressed="false"><i data-icon="face"></i> صورت</button>
+          </div>
           <button type="button" class="icon-btn" data-open="settings-dialog" aria-label="تنظیمات آینه" title="تنظیمات آینه"><i data-icon="settings"></i></button>
         </div>
         <div class="stage" id="stage" data-source="studio" data-renderer="loading">
@@ -55,11 +60,6 @@
           <div class="split" id="split" hidden><span>ورودی</span><span>پرو</span><b></b><input id="split-slider" type="range" min="8" max="92" value="50" dir="ltr" aria-label="مرز مقایسه"></div>
         </div>
         <div class="mirror-foot">
-          <div class="frames" role="group" aria-label="قاب پرو">
-            <button type="button" data-frame="full" aria-pressed="true"><i data-icon="body"></i> تمام‌قد</button>
-            <button type="button" data-frame="upper" aria-pressed="false"><i data-icon="upper"></i> بالاتنه</button>
-            <button type="button" data-frame="face" aria-pressed="false"><i data-icon="face"></i> صورت</button>
-          </div>
           <div class="mirror-actions">
             <button type="button" class="icon-btn pill" id="turn" aria-label="چرخش مانکن" title="چرخش مانکن"><i data-icon="rotate"></i></button>
             <button type="button" class="icon-btn pill" id="motion" aria-label="حرکت مانکن" title="حرکت مانکن" aria-pressed="true"><i data-icon="motion"></i></button>
