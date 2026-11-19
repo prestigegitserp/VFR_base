@@ -35,7 +35,7 @@ function textile(name) {
   return t;
 }
 
-function materials(style, color) {
+export function materials(style, color) {
   const description = fabrics[style];
   const dye = new T.Color(color);
   const main = new T.MeshPhysicalMaterial({

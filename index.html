@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f0e9">
-  <meta name="description" content="آتلیهٔ پرو مجازی VFR، با اتصال لباس سه‌بعدی به مفاصل بدن، تنظیم تن‌خور و پرو روی دوربین و عکس.">
-  <title>VFR Atelier v3 · اتاق پرو سه‌بعدی</title>
+  <meta name="description" content="آتلیهٔ پرو مجازی VFR با حجم سه‌بعدی بدن، پرو عینک روی پل بینی و نمای چرخان تن‌خور.">
+  <title>VFR Atelier v4 · پرو بدن و عینک</title>
   <link rel="icon" href="./mark.svg" type="image/svg+xml">
   <script type="module" src="/src/main.js"></script>
 </head>
@@ -17,14 +17,14 @@
         <a href="#wardrobe">کمد لباس</a>
         <button class="nav-button" type="button" data-open="import-dialog"><i data-icon="upload"></i> ورود اسکن</button>
         <button class="nav-button" type="button" data-open="cart-dialog"><i data-icon="bag"></i> <span>سفارش</span> <b id="cart-count" hidden>۰</b></button>
-        <a class="old-version" href="../v2/" aria-label="مشاهده نسخه ۲" dir="ltr">v2</a>
+        <a class="old-version" href="../v3/" aria-label="مشاهده نسخه ۳" dir="ltr">v3</a>
       </nav>
     </div>
   </header>
 
   <main class="page">
     <div class="intro">
-      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>لباس را در قاب دوربین پرو کن، اتصالش به بدن را تنظیم کن و تفاوت سایزها را بسنج.</p></div>
+      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>پرو با دوربین و عکس، تنظیم فریم عینک و بررسی فرم لباس از کنار.</p></div>
       <button type="button" class="outline intro-fit" data-open="fit-dialog"><i data-icon="ruler"></i> پروفایل اندازه</button>
     </div>
     <div class="workspace">
@@ -69,9 +69,14 @@
             <button type="button" class="icon-btn pill" id="freeze" aria-label="ثابت‌کردن فریم دوربین" title="ثابت‌کردن فریم دوربین" hidden><i data-icon="freeze"></i></button>
           </div>
           <div class="fit-tools">
+            <button type="button" class="text-tool" id="view-volume" aria-label="نمای سه‌بعدی تن‌خور" title="نمای سه‌بعدی تن‌خور" aria-pressed="false" hidden><i data-icon="cube"></i><span>نمای سه‌بعدی</span></button>
             <button type="button" class="text-tool" id="adjust-fit" data-open="alignment-dialog" aria-label="تنظیم تن‌خور" title="تنظیم تن‌خور" hidden><i data-icon="crop"></i><span>تنظیم تن‌خور</span></button>
             <button type="button" class="text-tool" id="inspect" aria-label="عیب‌یابی ردیابی" title="عیب‌یابی ردیابی" aria-pressed="false" aria-controls="inspector"><i data-icon="motion"></i><span>عیب‌یابی</span></button>
           </div>
+        </div>
+        <div class="orbit-tools" id="orbit-tools" hidden>
+          <label for="orbit-angle">چرخش نمای تن‌خور</label>
+          <input type="range" id="orbit-angle" min="-72" max="72" value="0" dir="ltr">
         </div>
         <section class="inspector" id="inspector" aria-labelledby="inspector-title" hidden>
           <div class="inspector-head"><h2 id="inspector-title">عیب‌یابی آینه</h2><button type="button" id="export-diagnostics" class="text-tool">گزارش فنی</button></div>
@@ -84,6 +89,7 @@
             <div><dt>آستین‌ها</dt><dd id="fit-arms">—</dd></div>
             <div><dt>زمان تشخیص</dt><dd id="fit-speed" dir="ltr">—</dd></div>
             <div><dt>رندر</dt><dd id="fit-render" dir="ltr">—</dd></div>
+            <div><dt>شواهد فیت</dt><dd id="fit-depth">—</dd></div>
           </dl>
           <p id="fit-issue" hidden></p>
         </section>
@@ -123,7 +129,7 @@
     </div>
     <footer class="foot">
       <span><i data-icon="shield"></i> تصویر و اندازه‌ها روی دستگاهت پردازش می‌شوند</span>
-      <a href="https://github.com/prestigegitserp/VFR_base/tree/v3" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۳</a>
+      <a href="https://github.com/prestigegitserp/VFR_base/tree/v4" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۴</a>
     </footer>
   </main>
 
@@ -178,6 +184,7 @@
       <label>کیفیت رندر <select id="quality"><option value="balanced">متعادل</option><option value="high">جزئیات بالا</option></select></label>
       <label>پاسخ ردیابی <select id="response"><option value="steady">ملایم و پایدار</option><option value="fast">سریع‌تر</option></select></label>
       <label>دوربین <select id="camera-facing"><option value="user">جلو</option><option value="environment">پشت، در صورت وجود</option></select></label>
+      <label for="lens-angle">زاویهٔ افقی لنز <input id="lens-angle" type="range" min="45" max="95" value="63" dir="ltr"><output id="lens-value" for="lens-angle" dir="ltr">۶۳°</output></label>
       <label>نمای آینه‌ای دوربین <input id="mirror" type="checkbox" checked></label>
       <label>پوشاندن لباس با مو و دست <input id="occlusion" type="checkbox" checked></label>
       <label>نمای نقاط تشخیص <input id="debug" type="checkbox"></label>
@@ -193,6 +200,7 @@
       <label for="align-y"><span>جابجایی عمودی</span><input id="align-y" data-align="y" type="range" min="-12" max="12" value="0" dir="ltr"><output for="align-y" id="value-y" dir="ltr">۰٪</output></label>
       <label for="align-width"><span>عرض</span><input id="align-width" data-align="width" type="range" min="-23" max="23" value="0" dir="ltr"><output for="align-width" id="value-width" dir="ltr">۰٪</output></label>
       <label for="align-length"><span>طول</span><input id="align-length" data-align="length" type="range" min="-23" max="23" value="0" dir="ltr"><output for="align-length" id="value-length" dir="ltr">۰٪</output></label>
+      <label for="align-depth"><span>عمق (میلی‌متر)</span><input id="align-depth" data-align="depth" type="range" min="-45" max="45" value="0" dir="ltr"><output for="align-depth" id="value-depth" dir="ltr">۰</output></label>
     </div>
     <div class="dialog-actions"><button type="button" id="align-reset" class="outline">بازنشانی این قاب</button><button type="button" data-close class="primary">بازگشت به آینه</button></div>
   </dialog>

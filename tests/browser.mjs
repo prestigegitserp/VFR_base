@@ -8,22 +8,27 @@ import jpeg from 'jpeg-js';
 const [photo, portrait, video] = process.argv.slice(2).map(resolvePath);
 function resolvePath(x){return resolve(x);}
 if(!photo||!portrait||!video)throw new Error('Pass a full pose photo, a portrait, and a Y4M video.');
-const upper=resolve('.render/upper-fixture.jpg');
-const pixels=jpeg.decode(await readFile(photo),{useTArray:true});
-const x0=Math.floor(pixels.width*.27), y0=Math.floor(pixels.height*.32);
-const width=Math.floor(pixels.width*.47), height=Math.floor(pixels.height*.292);
-const rgb=new Uint8Array(width*height*4);
-for(let y=0;y<height;y++){
-  const from=((y+y0)*pixels.width+x0)*4;
-  rgb.set(pixels.data.subarray(from,from+width*4),y*width*4);
+async function crop(file,name,u,v,w,h){
+  const dest=resolve('.render/'+name+'.jpg');
+  const pixels=jpeg.decode(await readFile(file),{useTArray:true});
+  const x0=Math.floor(pixels.width*u), y0=Math.floor(pixels.height*v);
+  const width=Math.floor(pixels.width*w), height=Math.floor(pixels.height*h);
+  const rgb=new Uint8Array(width*height*4);
+  for(let y=0;y<height;y++){
+    const from=((y+y0)*pixels.width+x0)*4;
+    rgb.set(pixels.data.subarray(from,from+width*4),y*width*4);
+  }
+  await writeFile(dest,jpeg.encode({data:rgb,width,height},89).data);
+  return dest;
 }
-await writeFile(upper,jpeg.encode({data:rgb,width,height},87).data);
+const upper=await crop(photo,'upper-fixture',.27,.32,.47,.292);
+const close=await crop(portrait,'close-fixture',.095,.010,.81,.455);
 const root=resolve('dist');
 const headers={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json',
   '.wasm':'application/wasm','.webp':'image/webp','.woff2':'font/woff2','.svg':'image/svg+xml'};
 const server=createServer(async(req,res)=>{
   try{
-    const relative=new URL(req.url,'http://localhost').pathname.replace(/^\/VFR_base\/v3\//,'');
+    const relative=new URL(req.url,'http://localhost').pathname.replace(/^\/VFR_base\/v4\//,'');
     const path=resolve(root,relative||'index.html');
     if(!path.startsWith(root+'/')||!(await stat(path)).isFile())throw new Error('not found');
     res.writeHead(200,{'content-type':headers[extname(path)]??'application/octet-stream'});
@@ -31,7 +36,7 @@ const server=createServer(async(req,res)=>{
   }catch{res.writeHead(404).end();}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v3/';
+const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v4/';
 let instance;
 try{
   instance=await chromium.launch({headless:true,executablePath:process.env.VFR_CHROMIUM,args:[
@@ -103,8 +108,22 @@ try{
         minX=Math.min(minX,column);maxX=Math.max(maxX,column);
         minY=Math.min(minY,y);maxY=Math.max(maxY,y);
       }
-      return {count,center:count?x/count:0,x:minX,w:maxX-minX,y:minY,h:maxY-minY};
+      return {count,center:count?x/count:0,x:minX,w:maxX-minX,y:minY,h:maxY-minY,width,height};
     });
+  }
+  const shots=Boolean(process.env.VFR_BROWSER_SHOTS);
+  const preview=(name)=>shots?page.screenshot({path:'.render/pro-'+name+'.jpg',type:'jpeg',quality:89}):null;
+  async function openDiagnostics(){
+    await page.locator('#inspect').click();
+    await page.locator('#inspector').waitFor();
+    const capturedReport=page.waitForEvent('download');
+    await page.locator('#export-diagnostics').click();
+    const report=await capturedReport;
+    assert.equal(report.suggestedFilename(),'VFR-v4-diagnostics.json');
+    const diag=JSON.parse(await readFile(await report.path(),'utf8'));
+    assert.ok(!JSON.stringify(diag).includes('landmarks') && !('photo' in diag));
+    await page.locator('#inspect').click();
+    return diag;
   }
   await page.locator('button[data-frame=full]').click();
   await page.locator('button[data-filter=all]').click();
@@ -123,7 +142,7 @@ try{
   await page.locator('#stage[data-matte=active]').waitFor();
   const initial=await overlay();
   assert.ok(initial.count>220 && initial.h>50,JSON.stringify(initial));
-  if(process.env.VFR_BROWSER_SHOTS)await page.screenshot({path:'.render/pro-upper.jpg',type:'jpeg',quality:86});
+  await preview('upper');
   await page.locator('#adjust-fit').click();
   await page.locator('#coverage').selectOption('off');
   const beforeAdjustment=await overlay();
@@ -139,23 +158,42 @@ try{
   await page.locator('#alignment-dialog [data-close]').first().click();
   await page.locator('.look[data-look=orion]').click();
   assert.ok((await overlay()).count>220);
-  if(process.env.VFR_BROWSER_SHOTS)await page.screenshot({path:'.render/pro-orion.jpg',type:'jpeg',quality:86});
-  await page.locator('#inspect').click();
-  await page.locator('#inspector').waitFor();
-  const capturedReport=page.waitForEvent('download');
-  await page.locator('#export-diagnostics').click();
-  const report=await capturedReport;
-  assert.equal(report.suggestedFilename(),'VFR-v3-diagnostics.json');
-  const diag=JSON.parse(await readFile(await report.path(),'utf8'));
+  await preview('orion');
+  const diag=await openDiagnostics();
   assert.ok(diag.mask && diag.source==='photo' && diag.trackingScore>=50);
-  assert.ok(!JSON.stringify(diag).includes('landmarks') && !('photo' in diag));
-  await page.locator('#inspect').click();
   console.log('OK: cropped photo has fitted pixels, alignment and mask controls, sanitized diagnostics',initial,adjusted);
+  await page.locator('#photo-file').setInputFiles(close);
+  await expectSignal('پرو روی عکس');
+  await page.locator('#stage[data-depth=body]').waitFor();
+  const tight=await overlay();
+  assert.ok(tight.count>170 && tight.y>tight.height*.29 && tight.h>42,JSON.stringify(tight));
+  await preview('near');
+  await page.locator('#view-volume').click();
+  await page.locator('#stage[data-view=model]').waitFor();
+  const render=page.locator('#render');
+  const front=jpeg.decode(await render.screenshot({type:'jpeg',quality:82}));
+  await page.locator('#orbit-angle').press('End');
+  const side=jpeg.decode(await render.screenshot({type:'jpeg',quality:82}));
+  let changed=0;
+  for(let i=0;i<front.data.length;i+=24){
+    if(Math.abs(front.data[i]-side.data[i])+Math.abs(front.data[i+1]-side.data[i+1])+Math.abs(front.data[i+2]-side.data[i+2])>36)changed++;
+  }
+  assert.ok(changed>420,JSON.stringify({changed}));
+  await preview('orbit');
+  await page.locator('#view-volume').click();
+  await page.locator('#stage[data-view=image]').waitFor();
+  console.log('OK: near-camera upper torso and actual side-view pixel changes',changed);
   await page.locator('button[data-frame=face]').click();
   await page.locator('#photo-file').setInputFiles(portrait);
   await expectSignal('پرو روی عکس');
   assert.equal(await page.locator('#stage').getAttribute('data-landmarks'),'478');
-  console.log('OK: face-only image tracking',await page.locator('#stage').getAttribute('data-vision'));
+  await page.locator('#stage[data-depth=face]').waitFor();
+  const eyewear=await overlay();
+  assert.ok(eyewear.count>28 && eyewear.w>42 && eyewear.y<eyewear.height*.35,JSON.stringify(eyewear));
+  const glassesReport=await openDiagnostics();
+  assert.ok(glassesReport.headFitPx>=0&&glassesReport.headFitPx<23,JSON.stringify(glassesReport));
+  await preview('glasses');
+  console.log('OK: face surface fit and actual visible frame pixels',eyewear,glassesReport.headFitPx);
   await page.locator('button[data-frame=full]').click();
   await page.locator('button[data-source=live]').click();
   await expectSignal('ردیابی بدن');

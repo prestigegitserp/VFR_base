@@ -2,7 +2,10 @@ import './style.css';
 import { asset, catalog, clamp, cm, compatible, fabrics, fitModes, form, forms, metrics, show, startingSize } from './catalog.js';
 import { Atelier } from './atelier.js';
 import { Vision } from './vision.js';
-import { bodyRig, contain, faceRig, Temporal } from './tracking.js';
+import { contain, Temporal } from './tracking.js';
+import { projection as cameraProjection, solveHead } from './camera-fit.js';
+import { solveBody } from './body-volume.js';
+import { subjectMask } from './subject-mask.js';
 import { drawMedia, FrameCompositor } from './composite.js';
 import { checkSize, chooseSize, manualProfile, TwoViewScan } from './sizing.js';
 import { listPackages, readBodyScan, storePackage, unpackPackage } from './protocol.js';
@@ -18,11 +21,11 @@ const el=(tag,content,cls)=>{
   return n;
 };
 const stage=$('stage'), video=$('video'), img=$('photo'), canvas=$('render'), ctx=$('foreground').getContext('2d');
-const storage='vfr-atelier:v3:';
+const storage='vfr-atelier:v4:';
 try{
   if(!localStorage.getItem(storage+'initialized')){
     for(const key of ['profile','preference','cart']){
-      const old=localStorage.getItem('vfr-atelier:v2:'+key);
+      const old=localStorage.getItem('vfr-atelier:v3:'+key)??localStorage.getItem('vfr-atelier:v2:'+key);
       if(old!=null&&localStorage.getItem(storage+key)==null)localStorage.setItem(storage+key,old);
     }
     localStorage.setItem(storage+'initialized','true');
@@ -34,20 +37,22 @@ const put=(key,value)=>{
   catch{/* Preview and imports can run without local preferences. */}
 };
 const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
-const emptyAlignment=()=>({x:0,y:0,width:0,length:0});
+const emptyAlignment=()=>({x:0,y:0,width:0,length:0,depth:0});
 const state={
   source:'studio',mode:'full',item:catalog[0],size:startingSize(catalog[0]),color:0,formId:catalog[0].form,formPinned:false,
   body:get('profile'),preference:get('preference')??'regular',cart:get('cart')??[],filter:'all',records:new Map(),
   move:!reduce,wind:false,turn:0,zoom:1,high:false,mirror:true,occlusion:true,debug:false,split:0,splitAt:50,apply:false,
   coverage:'balanced',response:'steady',camera:'user',alignment:{full:emptyAlignment(),upper:emptyAlignment(),face:emptyAlignment()},
-  busy:false,ready:false,tracked:null,mask:null,delegate:'',lastInfer:0,poseMs:0,maskMs:0,light:.50,scan:null,issue:'',
+  busy:false,ready:false,tracked:null,mask:null,headFrame:null,faceProbe:0,delegate:'',lastInfer:0,poseMs:0,maskMs:0,
+  light:.50,scan:null,issue:'',lens:63,inspection:null,orbit:0,
 };
 const vision=new Vision(), smoothPose=new Temporal(), smoothWorld=new Temporal(), smoothFace=new Temporal([33,263]);
 const compositor=new FrameCompositor();
 const urls=new Map();
 let studio, stream, photoURL, frame=0, operation=0, display=0, pending=false, resultTime=0, lastFrame=-1;
 let commands=Promise.resolve(), metricsAt=0, reportCount=0, prev=0, noticeTimer, messageAction, guidanceAction;
-let bounds={w:1,h:1}, renderKey=null, projection=null, rigRevision=0, stable=null, lastPaint=0, statsAt=0, renderMs=0, fps=0;
+let bounds={w:1,h:1}, renderKey=null, projection=null, headProjection=null, rigRevision=0, stable=null,
+  lastPaint=0, statsAt=0, renderMs=0, fps=0;
 const enqueue=(fn)=>{const p=commands.then(fn);commands=p.catch(()=>{});return p;};
 const gpu=()=>!!studio&&!studio.lost;
 const semantic=()=>state.occlusion||state.mode==='upper'||state.mode!=='face'&&state.coverage!=='off'||Boolean(state.scan);
@@ -172,17 +177,22 @@ function controls(){
   $$('button[data-frame]').forEach(b=>press(b,b.dataset.frame===state.mode));
   $('motion').disabled=!demo||!supported;$('turn').disabled=!demo||!supported;
   $('wind').disabled=!supported||!['dress','skirt','coat'].includes(state.item.cut)||state.item.source==='scan'||!hasFrame;
-  $('compare').disabled=!supported||!hasFrame;
+  $('compare').disabled=!supported||!hasFrame||Boolean(state.inspection);
   $('capture').disabled=!hasFrame;
   $('freeze').hidden=state.source!=='live';
   $('freeze').disabled=!supported||!source()||state.busy;
   $('adjust-fit').hidden=demo;
   $('adjust-fit').disabled=!supported;
+  $('view-volume').hidden=demo;
+  $('view-volume').disabled=!supported||!state.ready||(!stable?.rig&&!state.inspection);
+  press($('view-volume'),Boolean(state.inspection));
+  $('orbit-tools').hidden=!state.inspection;
+  stage.dataset.view=state.inspection?'model':'image';
   if(demo&&$('alignment-dialog').open)$('alignment-dialog').close();
   press($('inspect'),state.debug);
   $('inspector').hidden=!state.debug;
   press($('motion'),state.move);press($('wind'),state.wind&&!$('wind').disabled);press($('compare'),state.split>0&&!$('compare').disabled);
-  $('split').hidden=!(state.split&&hasFrame&&supported);
+  $('split').hidden=!(state.split&&hasFrame&&supported&&!state.inspection);
   $('split').style.setProperty('--split',`${state.splitAt}%`);
 }
 function currentForm(){
@@ -232,7 +242,8 @@ $$('button[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.fil
 function resetVision() {
   state.ready=false;state.tracked=null;state.mask=null;
   state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.delegate='';state.issue='';
-  projection=null;stable=null;
+  projection=null;headProjection=null;stable=null;state.headFrame=null;state.faceProbe=0;
+  state.inspection=null;state.orbit=0;
   stage.dataset.fit='none';
   delete stage.dataset.mask;delete stage.dataset.vision;delete stage.dataset.landmarks;
   smoothPose.clear();smoothWorld.clear();smoothFace.clear();
@@ -385,13 +396,18 @@ function applyTracking(result,at){
   state.issue=result.underlyingError?'mask-unavailable':'';
   stage.dataset.vision=vision.worker?'worker':'main';
   stage.dataset.landmarks=String((result.pose?.length??0)+(result.face?.length??0));
-  const {pose,world,face,mask,matrix}=result;
+  const {pose,world,face,mask}=result;
   const live=state.source==='live';
   const track=(filter,points)=>live&&points?filter.update(points,at,state.response):points;
-  state.tracked={pose:track(smoothPose,pose),world:track(smoothWorld,world),face:track(smoothFace,face),matrix,at};
+  if(result.headAttempted)state.faceProbe=at;
+  if(face)state.headFrame={face:track(smoothFace,face),at,nose:pose?.[0]};
+  const previous=state.headFrame;
+  const moved=previous?.nose&&pose?.[0]?Math.hypot(previous.nose.x-pose[0].x,previous.nose.y-pose[0].y):0;
+  const head=previous&&at-previous.at<350&&moved<.032?previous.face:null;
+  state.tracked={pose:track(smoothPose,pose),world:track(smoothWorld,world),face:head,at};
   if(mask){
     stage.dataset.mask='ready';
-    state.mask={frame:mask,at,anchor:trackingCenter(pose,face)};
+    state.mask={frame:subjectMask(mask,pose,face),at,anchor:trackingCenter(pose,face)};
   }
   if(state.scan&&mask&&pose){
     const [w,h]=mediaSize(video);
@@ -421,20 +437,22 @@ function currentMask(now){
 function project(now=performance.now()) {
   const rect=sourceRect(source());
   if(!state.tracked||!rect)return null;
-  const tracked=state.tracked, usable=currentMask(now), mask=usable?.frame, mirror=mirrored(), reference=studio?.reference;
-  if(projection?.tracked===tracked&&projection.mask===mask&&projection.bounds===bounds&&projection.mirror===mirror&&
-      projection.reference===reference&&projection.body===state.body)return projection.rig;
-  const stages={...tracked,mask,maskShift:usable?.shift};
-  const rig=state.mode==='face'
-    ? faceRig(stages.face,stages.matrix,rect,bounds,mirror,state.body)
-    : bodyRig(stages,state.mode,rect,bounds,mirror,reference??{torso:.45,shoulder:400},state.body);
+  const tracked=state.tracked, usable=currentMask(now), mask=usable?.frame;
+  if(projection?.tracked===tracked&&projection.mask===mask&&projection.bounds===bounds&&projection.lens===state.lens&&
+      projection.body===state.body)return projection.rig;
+  const camera=cameraProjection(rect,bounds,state.lens), eye=state.body?.measures?.eye?.value;
+  if(headProjection?.face!==tracked.face||headProjection?.bounds!==bounds||headProjection?.lens!==state.lens||headProjection?.eye!==eye){
+    headProjection={face:tracked.face,bounds,lens:state.lens,eye,rig:solveHead(tracked.face,camera,eye)};
+  }
+  const rig=state.mode==='face'?headProjection.rig:solveBody({...tracked,mask,maskShift:usable?.shift},state.mode,camera,headProjection.rig,state.body);
   if(rig&&usable)rig.maskShift=usable.shift;
-  projection={tracked,mask,bounds,mirror,reference,body:state.body,rig};
+  projection={tracked,mask,bounds,lens:state.lens,body:state.body,rig};
   rigRevision++;
   return rig;
 }
 
 function fittedFrame(now){
+  if(state.inspection)return state.inspection;
   const age=now-(state.tracked?.at??0);
   const maxAge=clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
   const live=state.source==='live';
@@ -458,7 +476,8 @@ function sense(now){
   pending=true;lastFrame=video.currentTime;resultTime=now;
   const id=operation, mode=state.mode;
   const masks=semantic()&&(state.scan||!state.mask||now-state.mask.at>clamp(state.maskMs*1.31+69,105,315));
-  enqueue(()=>vision.infer(video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper'}))
+  const headHint=mode==='upper'&&now-state.faceProbe>clamp(state.poseMs*.96+102,136,320);
+  enqueue(()=>vision.infer(video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper',headHint}))
     .then(result=>{if(id===operation)applyTracking(result,performance.now());})
     .catch(e=>{if(id===operation)fail(e,id);})
     .finally(()=>{pending=false;});
@@ -512,22 +531,26 @@ let recentStats;
 function diagnostics(now,result){
   const rig=result.rig;
   const media=source(),[w,h]=mediaSize(media);
-  recentStats={version:3,source:state.source,frame:state.mode,status:result.status,
+  recentStats={version:4,source:state.source,frame:state.mode,status:result.status,
     anchor:rig?.kind??null,trackingScore:rig?Math.round(rig.quality*100):null,
     yaw:rig?Math.round(rig.yaw*180/Math.PI):null,arms:rig?.armQuality?.map(x=>x>=.55?'tracked':'estimated')??null,
     mask:!!result.mask,maskAgeMs:result.mask&&state.source==='live'?ms(now-state.mask?.at):null,
     delegate:state.delegate||null,thread:stage.dataset.vision??null,
     dimensions:media?[w,h]:null,detectorMs:ms(state.poseMs),maskMs:ms(state.maskMs),
-    renderMs:ms(renderMs),fps,coverage:state.coverage,issue:state.issue||null};
+    renderMs:ms(renderMs),fps,coverage:state.coverage,issue:state.issue||null,
+    horizontalFov:state.lens,headFitPx:ms(rig?.reprojection??rig?.head?.reprojection),
+    shoulderContours:rig?.volume?.topCount??null,preview:state.inspection?'3d':'image'};
   if(!state.debug)return;
   $('fit-health').textContent=state.source==='studio'?'مانکن':statusLabels[result.status];
-  $('fit-anchor').textContent=({face:'چشم‌ها و محور سر',body:'ژست بدن',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
+  $('fit-anchor').textContent=({face:'بینی و مش صورت',body:'مفصل و حجم تنه',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
   $('fit-score').textContent=rig?show(recentStats.trackingScore):'—';
   $('fit-yaw').textContent=rig?`${show(recentStats.yaw)}°`:'—';
   $('fit-mask').textContent=result.mask?(state.source==='photo'?'آماده':`${show(recentStats.maskAgeMs)} ms`):'—';
   $('fit-arms').textContent=rig?.armQuality?rig.armQuality.map(x=>x>=.55?'ردیابی‌شده':'تخمینی').join(' / '):'—';
   $('fit-speed').textContent=state.delegate?`${state.delegate} / ${Math.round(state.poseMs)} ms`:'—';
   $('fit-render').textContent=state.source==='live'?`${ms(renderMs)} ms / ${fps} FPS`:`${ms(renderMs)} ms`;
+  $('fit-depth').textContent=rig?.kind==='face'?`${show(recentStats.headFitPx)} پیکسل خطای تصویر`:
+    rig?.volume?`${show(rig.volume.topCount)} از ۲ لبهٔ سرشانه`:'—';
   const issue=$('fit-issue');
   const problem=state.issue?'یکی از اجزای تشخیص آماده نیست. برای جزئیات، گزارش را بگیر.':
     state.item.source==='scan'?'مدل اسکن‌شده به نقاط مرجع بدن متصل می‌شود. حرکت آستین به مدل استخوان‌بندی‌شده نیاز دارد.':'';
@@ -541,12 +564,19 @@ function animate(now){
     if(state.debug&&now-statsAt>=450){diagnostics(now,{status:'none',rig:null,mask:null});statsAt=now;}
     return;
   }
-  if(live&&state.ready)sense(now);
+  const inspection=Boolean(state.inspection);
+  if(live&&state.ready&&!inspection)sense(now);
   const result=fittedFrame(now), {rig,mask,alpha,status}=result;
+  const viewButton=$('view-volume');
+  const disabled=!rig||demo;
+  if(viewButton.disabled!==disabled)viewButton.disabled=disabled;
+  const depth=rig?.kind==='face'?'face':rig?.volume?'body':'none';
+  if(stage.dataset.depth!==depth)stage.dataset.depth=depth;
   if(stage.dataset.fit!==status)stage.dataset.fit=status;
   const matte=mask?'active':'off';
   if(stage.dataset.matte!==matte)stage.dataset.matte=matte;
-  if(live&&state.ready){
+  if(inspection){signal('نمای سه‌بعدی تن‌خور','ready');}
+  if(live&&state.ready&&!inspection){
     const label=status==='hold'?'بازیابی ردیابی':status==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب';
     signal(label,status==='locked'?'ready':'pending');
     if(!scanPrompt(now))guide(status==='hold'?'چند لحظه صورت و شانه‌ها را در قاب نگه دار.':!rig?fitModes[state.mode].title:
@@ -561,9 +591,10 @@ function animate(now){
   if(now-statsAt>=420){diagnostics(now,result);statsAt=now;}
   if(live&&now-lastPaint<1000/(state.high?42:35))return;
   const adjustment=state.alignment[state.mode];
-  const key=!live&&(demo?!state.move&&!state.wind:!state.wind)
+  const key=(!live||inspection)&&(demo?!state.move&&!state.wind:!state.wind)
     ? [display,studio.wear?.group.uuid,studio.avatar?.model.uuid,bounds.w,bounds.h,state.source,rigRevision,
-      state.split,state.splitAt,state.turn,state.zoom,state.mode,state.high,state.debug,state.coverage,state.occlusion,...Object.values(adjustment)].join('|')
+      state.split,state.splitAt,state.turn,state.zoom,state.mode,state.high,state.debug,state.coverage,state.occlusion,
+      inspection,state.orbit,mirrored(),...Object.values(adjustment)].join('|')
     : null;
   if(key&&key===renderKey)return;
   renderKey=key;lastPaint=now;
@@ -572,9 +603,10 @@ function animate(now){
   const media=source(), rect=sourceRect(media);
   if(media&&(!live||frame%12===1))light(media,rig);
   const started=performance.now();
-  studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,lightValue:state.light,reduce,adjustment});
-  studio.draw(state.split?state.splitAt/100:0);
-  if(!demo)compositor.draw(ctx,studio,{rect,mirror:mirrored(),mask,rig,alpha,debug:state.debug,cut:state.item.cut,
+  studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,
+    lightValue:state.light,reduce,adjustment,mirror:mirrored(),orbit:inspection?state.orbit:null});
+  studio.draw(state.split&&!inspection?state.splitAt/100:0);
+  if(!demo&&!inspection)compositor.draw(ctx,studio,{rect,mirror:mirrored(),mask,rig,alpha,debug:state.debug,cut:state.item.cut,
     tailored:state.item.cut==='coat'||state.item.cut==='jacket'&&state.item.id!=='orion',coverage:state.coverage,occlusion:state.occlusion});
   renderMs=renderMs*.65+(performance.now()-started)*.35;
   reportCount++;
@@ -594,8 +626,8 @@ $('capture').addEventListener('click',()=>{
   bg.addColorStop(0,'#7d6c5c');bg.addColorStop(1,'#352921');
   g.fillStyle=bg;g.fillRect(0,0,bounds.w,bounds.h);
   const media=source();
-  if(media)drawMedia(g,media,sourceRect(media),mirrored());
-  if(state.source==='studio'){
+  if(media&&!state.inspection)drawMedia(g,media,sourceRect(media),mirrored());
+  if(state.source==='studio'||state.inspection){
     if(gpu()&&studio.draw(state.split?state.splitAt/100:0))g.drawImage(canvas,0,0,bounds.w,bounds.h);
     else if($('poster').complete&&$('poster').naturalWidth){
       const p=$('poster');drawMedia(g,p,contain(p.naturalWidth,p.naturalHeight,bounds.w,bounds.h),false);
@@ -617,6 +649,20 @@ $('freeze').addEventListener('click',()=>{
   still.toBlob(blob=>{if(blob)loadPhoto(blob,id);},'image/jpeg',.93);
 });
 
+$('view-volume').addEventListener('click',()=>{
+  if(state.inspection){
+    state.inspection=null;
+    signal(state.source==='photo'?'پرو روی عکس':'بازیابی ردیابی','ready');
+  }else{
+    const frame=fittedFrame(performance.now());
+    if(!frame.rig)return;
+    state.inspection=frame;state.orbit=0;$('orbit-angle').value='0';
+    message();guide(null);
+  }
+  renderKey=null;controls();
+});
+$('orbit-angle').addEventListener('input',e=>{state.orbit=Number(e.currentTarget.value);});
+
 $$('button[data-source]').forEach(b=>b.addEventListener('click',()=>{
   const next=b.dataset.source;
   if(next==='photo'&&state.source===next){pickPhoto();return;}
@@ -636,6 +682,9 @@ $('split-slider').addEventListener('input',e=>{state.splitAt=Number(e.currentTar
 $('quality').addEventListener('change',e=>{state.high=e.currentTarget.value==='high';resize();});
 $('zoom').addEventListener('input',e=>{state.zoom=Number(e.currentTarget.value)/100;});
 $('response').addEventListener('change',e=>{state.response=e.currentTarget.value;});
+$('lens-angle').addEventListener('input',e=>{
+  state.lens=Number(e.currentTarget.value);$('lens-value').textContent=show(state.lens)+'°';
+});
 $('camera-facing').addEventListener('change',e=>{
   state.camera=e.currentTarget.value;
   state.mirror=state.camera==='user';$('mirror').checked=state.mirror;
@@ -658,20 +707,20 @@ $('debug').addEventListener('change',e=>setDebug(e.currentTarget.checked));
 $('inspect').addEventListener('click',()=>setDebug(!state.debug));
 $('export-diagnostics').addEventListener('click',()=>{
   const now=performance.now();diagnostics(now,gpu()?fittedFrame(now):{status:'none'});
-  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v3-diagnostics.json');
+  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v4-diagnostics.json');
 });
 const alignmentInputs=$$('[data-align]');
 function syncAlignment(){
   for(const input of alignmentInputs){
     const key=input.dataset.align;
     input.value=state.alignment[state.mode][key];
-    $(`value-${key}`).textContent=`${show(Number(input.value))}٪`;
+    $(`value-${key}`).textContent=show(Number(input.value))+(key==='depth'?'':'٪');
   }
 }
 for(const input of alignmentInputs) input.addEventListener('input',()=>{
   const key=input.dataset.align;
   state.alignment[state.mode][key]=Number(input.value);
-  $(`value-${key}`).textContent=`${show(Number(input.value))}٪`;
+  $(`value-${key}`).textContent=show(Number(input.value))+(key==='depth'?'':'٪');
 });
 $('align-reset').addEventListener('click',()=>{
   state.alignment[state.mode]=emptyAlignment();$('coverage').value='balanced';state.coverage='balanced';

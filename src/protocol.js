@@ -169,7 +169,7 @@ function openGarments(name, create) {
 
 let database;
 function connection() {
-  database ??= openGarments('vfr-atelier-3',true).catch(e=>{database=null;throw e;});
+  database ??= openGarments('vfr-atelier-4',true).catch(e=>{database=null;throw e;});
   return database;
 }
 
@@ -193,7 +193,8 @@ function readPackages(db) {
 }
 
 export async function listPackages() {
-  const previous=await openGarments('vfr-atelier-2',false).then(db=>readPackages(db).finally(()=>db.close())).catch(()=>[]);
+  const previous=await Promise.all([2,3].map(version=>openGarments('vfr-atelier-'+version,false)
+    .then(db=>readPackages(db).finally(()=>db.close())).catch(()=>[])));
   const current=await connection().then(readPackages).catch(()=>[]);
-  return [...new Map([...previous,...current].map(record=>[record.id,record])).values()];
+  return [...new Map([...previous.flat(),...current].map(record=>[record.id,record])).values()];
 }

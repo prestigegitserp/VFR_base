@@ -1,0 +1,6 @@
+The face-reference mesh is a numeric conversion of the canonical 468-vertex
+face model in MediaPipe, copyright Google LLC, licensed under Apache 2.0:
+https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model.obj
+
+Vertices are stored in centimeters and the triangular faces use zero-based
+indices. See Apache-2.0.txt for the license terms.

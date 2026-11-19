@@ -205,3 +205,12 @@ input[type=checkbox],input[type=range]{accent-color:#865036}
   .inspector dl{grid-template-columns:repeat(2,minmax(0,1fr))}
   #alignment-dialog{right:13px;bottom:12px}
 }
+
+.stage[data-view=model] .media,.stage[data-view=model] #foreground{visibility:hidden}
+.stage[data-view=model] .studio-light{display:block;background:radial-gradient(ellipse at 50% 45%,#8d8073,#4b3e32 61%,#25201c)}
+.stage[data-view=model] #render{opacity:1}
+.stage[data-view=model] .viewfinder{opacity:.22}
+.fit-tools{flex-wrap:wrap}
+.orbit-tools{display:flex;align-items:center;gap:12px;padding:8px 15px 12px;color:#f0dbc8;font-size:.86rem}
+.orbit-tools input{width:min(240px,60%);accent-color:#e2a875}
+#lens-value{min-width:32px;color:#7e4d31}

@@ -4,8 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { bodyModel, makeAvatar } from './avatar.js';
 import { clamp } from './catalog.js';
 import { dispose, makeWear } from './wear.js';
-import { WORLD_HEIGHT } from './tracking.js';
-import { solveDrape } from './fit.js';
+import { FittedStage } from './fitted-stage.js';
 
 const V=(x=0,y=0,z=0)=>new T.Vector3(x,y,z);
 function light(scene,color,intensity,position,shadow=false){
@@ -67,13 +66,12 @@ export class Atelier {
     this.r=r;
     this.canvas=canvas;
     this.scene=new T.Scene();
-    this.camera=new T.OrthographicCamera(-1,1,1,-1,.02,22);
+    this.studioCamera=new T.OrthographicCamera(-1,1,1,-1,.02,22);
+    this.camera=this.studioCamera;
     this.root=new T.Group();
-    this.ar=new T.Group();
-    this.alignment=new T.Group();
     this.dressed=new T.Group();
-    this.scene.add(this.root,this.ar);
-    this.ar.add(this.alignment);
+    this.scene.add(this.root);
+    this.fitted=new FittedStage(this.scene);
     this.root.add(this.dressed);
     this.key=light(this.scene,'#ffe4c8',3.10,[-2.1,3.2,2.7],true);
     this.rim=[light(this.scene,'#ffb78e',1.58,[1.15,2.05,-1.89]),light(this.scene,'#dad3e0',.64,[-1.54,1.7,-2.2])];
@@ -97,9 +95,6 @@ export class Atelier {
     this.assetId=0;
     this.play=0;
     this.clock=0;
-    this.velocity=V();
-    this.lastOrigin=V();
-    this.lastAngle=0;
     this.fresh=true;
     this.mode='full';
     canvas.addEventListener('webglcontextlost',(event)=>{event.preventDefault();this.lost=true;restored(false);});
@@ -125,6 +120,7 @@ export class Atelier {
   }
   clearGarment(){
     this.pendingGarment=false;
+    this.fitted.clear();
     if(!this.wear)return;
     this.wear.group.parent?.remove(this.wear.group);
     this.wear.dispose();
@@ -137,6 +133,7 @@ export class Atelier {
     if(tag!==this.assetId){p.dispose();return false;}
     this.clearGarment();
     this.wear=p;
+    this.fitted.prepare(item,size,color);
     this.item=item;
     this.attachment=item.frame;
     this.avatar?.cover(item,size);
@@ -149,95 +146,63 @@ export class Atelier {
     this.fresh=true;
     this.wear?.reset();
   }
-  update({dt,time,mode,rig,move,wind,turn,zoom,lightValue,reduce,adjustment={x:0,y:0,width:0,length:0}}){
+  update({dt,time,mode,rig,move,wind,turn,zoom,lightValue,reduce,adjustment,mirror=false,orbit=null}){
     if(this.lost)return;
     const demo=this.source==='studio';
     this.plinth.visible=this.floor.visible=demo&&mode==='full';
     this.r.shadowMap.enabled=demo;
     this.key.castShadow=demo;
     this.root.visible=demo;
-    this.ar.visible=!demo&&Boolean(rig);
-    this.r.toneMappingExposure=demo?1.06:clamp(.76+lightValue*.48,.82,1.15);
-    this.key.intensity=demo?3.10:2.06;
-    this.rim[0].intensity=demo?1.58:.37;
-    this.rim[1].intensity=demo?.64:.23;
-    const avatar=this.avatar;
-    const center=demo && avatar ? mode==='face'?avatar.spec.face.y-.021:mode==='upper'?avatar.spec.shoulderY-.102:avatar.spec.height*.49 : 0;
-    const extent=demo&&avatar?(mode==='face'?.355:mode==='upper'?.94:avatar.spec.height*1.115)/zoom:WORLD_HEIGHT;
-    const half=extent*.5,horizontal=half*this.width/this.height;
-    Object.assign(this.camera,{left:-horizontal,right:horizontal,top:half,bottom:-half});
-    this.camera.position.set(0,center+(demo&&mode==='full'?.072:0),5);
-    this.camera.lookAt(0,center,0);this.camera.updateProjectionMatrix();
+    this.mirror=!demo&&mirror;
+    this.r.toneMappingExposure=demo||orbit!==null?1.06:clamp(.81+lightValue*.44,.82,1.18);
+    this.key.intensity=demo?3.10:2.17;
+    this.rim[0].intensity=demo?1.58:.51;
+    this.rim[1].intensity=demo?.64:.29;
     const wear=this.wear;
-    if(!wear||!avatar){this.fresh=true;return;}
-    const parent=demo?this.dressed:this.alignment;
-    if(wear.group.parent!==parent)parent.add(wear.group);
-    wear.setPresentation?.(demo);
-    wear.group.visible=(mode==='face')===(this.attachment==='face');
-    if(demo) {
-      const root=this.dressed;
-      const rootAngle=mode==='face'?turn + (move?.23*Math.sin(this.play*.95):0):turn-.095+(move?.29*Math.sin(this.play*1.25):0);
-      if(move)this.play+=dt;
-      this.root.rotation.y=rootAngle;
-      this.root.position.x=mode==='full'&&move? .041*Math.sin(this.play*1.19):0;
-      root.rotation.set(0,0,0);root.scale.set(1,1,1);
-      root.position.copy(this.attachment==='face'?avatar.spec.face:V(0,avatar.spec.shoulderY,0));
-      const changed=this.fresh||move&&time-this.clock>29;
-      const pose=changed?avatar.update(this.play,move):avatar.pose;
-      if(changed)this.clock=time;
-      const loc=([a,b,c])=>[a,b,c].map(q=>q.clone().sub(root.position));
-      const legs=pose.legs.map(loc).flatMap(([a,b,c])=>[{a,b,radius:.073},{a:b,b:c,radius:.052}]);
-      if (wear.group.visible && (changed||wind||move)) wear.update(pose.arms.map(loc),legs,dt,{
-        x:move?2.5*Math.sin(this.play*3.1):0,z:0,y:0,turn:move?2.0*Math.cos(this.play*1.25):0,wind:wind?7.4:move&&!reduce?1.0:0,
-      },null,changed);
-      this.fresh=false;
-    } else if(rig) {
-      const root=this.ar;
-      const changed=this.fresh||this.lastRig!==rig;
-      root.position.copy(rig.origin);
-      root.quaternion.copy(rig.q);
-      root.scale.copy(rig.scale);
-      root.updateMatrix();
-      const inverse=root.matrix.clone().invert();
-      const toLocal=(p)=>p.clone().applyMatrix4(inverse);
-      const naturalWidth=rig.arms ? rig.depthSpan/rig.scale.x : rig.span/rig.scale.x;
-      const fitX=wear.anchors ? clamp(naturalWidth/wear.anchors.span,.69,1.38) : 1;
-      const fitY=wear.anchors&&rig.hip ? clamp(-toLocal(rig.hip[0].clone().lerp(rig.hip[1],.5)).y/wear.anchors.torso,.64,1.48) : 1;
-      this.alignment.position.set(adjustment.x*naturalWidth/100,-adjustment.y*naturalWidth/100,0);
-      this.alignment.scale.set(fitX*(1+adjustment.width/100),fitY*(1+adjustment.length/100),Math.sqrt(fitX*fitY));
-      if(rig.arms){
-        if(changed){
-          const elapsed=clamp((time-this.clock)/1000,.024,.22);
-          const vel=this.fresh?V():root.position.clone().sub(this.lastOrigin).divideScalar(elapsed);
-          this.drive=vel.clone().sub(this.velocity).divideScalar(elapsed).clampScalar(-12,12);
-          this.twist=this.fresh?0:clamp((rig.yaw-this.lastAngle)/elapsed,-6,6);
-          this.velocity.lerp(vel,.44);
-          this.lastOrigin.copy(root.position);
-          this.lastAngle=rig.yaw;
-          this.clock=time;
-          this.lastRig=rig;
-          this.drape=wear.fit?solveDrape(wear.fit,rig,toLocal):null;
-          this.arms=rig.arms.map(a=>a.map(toLocal));
-          this.legs=rig.leg.flatMap((l)=>{
-            const [a,b,c]=l.map(toLocal);return [{a,b,radius:.069},{a:b,b:c,radius:.051}];
-          });
-        }
-        if(changed||((rig.full||this.attachment==='full')&&(wind||this.source==='live'))){
-          this.drive.multiplyScalar(Math.exp(-dt*9));
-          this.twist*=Math.exp(-dt*9);
-          wear.update(this.arms,this.legs,dt,{x:this.drive.x,z:this.drive.z,y:this.drive.y,turn:this.twist,wind:wind?7.4:0},this.drape,changed);
-        }
-      }
-      this.fresh=false;
-    } else {
-      this.fresh=true;
+    if(!demo){
+      const compatible=wear&&(mode==='face')===(this.attachment==='face');
+      if(wear)wear.setPresentation?.(false);
+      this.activeGarment=compatible?(this.fitted.product??wear).group:null;
+      this.camera=this.fitted.update({rig:compatible?rig:null,mirror,adjustment,orbit,width:this.width,
+        height:this.height,time,dt,breeze:wind,scanned:wear});
+      return;
     }
+    this.fitted.group.visible=false;
+    this.activeGarment=wear?.group;
+    const avatar=this.avatar;
+    const center=avatar ? mode==='face'?avatar.spec.face.y-.021:mode==='upper'?avatar.spec.shoulderY-.102:avatar.spec.height*.49 : 0;
+    const extent=(avatar?(mode==='face'?.355:mode==='upper'?.94:avatar.spec.height*1.115):1.98)/zoom;
+    const half=extent*.5,horizontal=half*this.width/this.height;
+    const camera=this.studioCamera;
+    this.camera=camera;
+    Object.assign(camera,{left:-horizontal,right:horizontal,top:half,bottom:-half});
+    camera.position.set(0,center+(mode==='full'?.072:0),5);
+    camera.lookAt(0,center,0);camera.updateProjectionMatrix();
+    if(!wear||!avatar){this.fresh=true;return;}
+    const root=this.dressed;
+    if(wear.group.parent!==root)root.add(wear.group);
+    wear.setPresentation?.(true);
+    wear.group.visible=(mode==='face')===(this.attachment==='face');
+    const rootAngle=mode==='face'?turn + (move?.23*Math.sin(this.play*.95):0):turn-.095+(move?.29*Math.sin(this.play*1.25):0);
+    if(move)this.play+=dt;
+    this.root.rotation.y=rootAngle;
+    this.root.position.x=mode==='full'&&move? .041*Math.sin(this.play*1.19):0;
+    root.position.copy(this.attachment==='face'?avatar.spec.face:V(0,avatar.spec.shoulderY,0));
+    const changed=this.fresh||move&&time-this.clock>29;
+    const pose=changed?avatar.update(this.play,move):avatar.pose;
+    if(changed)this.clock=time;
+    const loc=([a,b,c])=>[a,b,c].map(q=>q.clone().sub(root.position));
+    const legs=pose.legs.map(loc).flatMap(([a,b,c])=>[{a,b,radius:.073},{a:b,b:c,radius:.052}]);
+    if(wear.group.visible&&(changed||wind||move))wear.update(pose.arms.map(loc),legs,dt,{
+      x:move?2.5*Math.sin(this.play*3.1):0,z:0,y:0,turn:move?2.0*Math.cos(this.play*1.25):0,wind:wind?7.4:move&&!reduce?1.0:0,
+    },null,changed);
+    this.fresh=false;
   }
   draw(split=0){
     if(this.lost)return false;
     this.r.setScissorTest(false);
     this.r.render(this.scene,this.camera);
-    const obj=this.wear?.group;
+    const obj=this.activeGarment;
     if(split&&obj?.visible){
       this.r.setScissor(0,0,this.width*split,this.height);
       this.r.setScissorTest(true);obj.visible=false;
@@ -248,7 +213,9 @@ export class Atelier {
     return true;
   }
   point(p){
-    const n=p.clone().project(this.camera);
+    const point=p.clone();
+    if(this.mirror)point.x*=-1;
+    const n=point.project(this.camera);
     return [(n.x+1)*this.width/2,(1-n.y)*this.height/2];
   }
 }

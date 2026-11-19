@@ -55,7 +55,7 @@ export class VisionCore {
     const primary=await this.task(mode==='face'?'face':'pose',method);
     return primary.delegate;
   }
-  async frame(image,{mode, method, time, masks, fallback=false}) {
+  async frame(image,{mode, method, time, masks, fallback=false, headHint=false}) {
     const now=performance.now();
     const key=mode==='face'?'face':'pose';
     const primary=await this.task(key,method);
@@ -73,10 +73,13 @@ export class VisionCore {
     }
     const upperShoulders=pose?.slice(11,13);
     const missingShoulders = !upperShoulders?.length || upperShoulders.some(p => (p.visibility??0)<.52 || p.y>.99 || p.x<0 || p.x>1);
-    if(mode==='upper' && fallback && missingShoulders){
+    const headAttempted=mode==='face'||mode==='upper'&&(headHint||method==='IMAGE'||fallback&&missingShoulders);
+    if(mode==='upper'&&headAttempted){
       try{
         const detector=await this.task('face',method);
-        face=run(detector.task).faceLandmarks[0]??null;
+        const output=run(detector.task);
+        face=output.faceLandmarks[0]??null;
+        matrix=output.facialTransformationMatrixes?.[0]?.data??null;
       }catch(e){underlyingError=e.message;}
     }
     const poseMs=performance.now()-now;
@@ -91,7 +94,7 @@ export class VisionCore {
       }catch(e){underlyingError=e.message;}
       maskMs=performance.now()-started;
     }
-    return {pose,world,face,matrix,mask,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
+    return {pose,world,face,matrix,mask,headAttempted,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
   }
   close() {
     for(const p of this.model.values())p.then(({task})=>task.close()).catch(()=>{});
