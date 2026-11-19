@@ -40,13 +40,14 @@ function traceRow(read, mask, x, y, limit) {
 function seatedFallback(face, read, mask, aspect) {
   if (!finite(face?.[152]) || !finite(face[10]) || !mask) return null;
   const chin = face[152], height = chin.y - face[10].y;
-  if (height < .09 || chin.y > .94) return null;
+  if (height < .09 || chin.y > .92) return null;
   const rows = [];
   const max = Math.min(.45, height * 1.4 / aspect);
-  for (const offset of [.085, .16, .25, .37, .49]) {
-    const y = chin.y + height * offset;
+  const available = Math.min(height * .53, .984 - chin.y);
+  for (const offset of [.13, .27, .42, .58, .75, .90]) {
+    const y = chin.y + available * offset;
     if (y > .978) continue;
-    const row = traceRow(read, mask, chin.x, y, max);
+    const row = [0,-.024,.024,-.047,.047].map(dx=>traceRow(read,mask,chin.x+dx,y,max)).find(Boolean);
     if (!row || row.width * aspect < height * .85 || row.width * aspect > height * 2.9) continue;
     rows.push({ ...row, y });
   }

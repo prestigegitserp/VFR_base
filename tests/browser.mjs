@@ -258,7 +258,17 @@ try{
   await page.locator('#stage[data-renderer=webgl]').waitFor();
   await page.locator('.look[data-look=orion]').click();
   await page.locator('button[data-source=live]').click();
-  await page.locator('#stage[data-depth=body][data-matte=active]').waitFor({timeout:115000});
+  try{
+    await page.locator('#stage[data-depth=body][data-matte=active]').waitFor({timeout:85000});
+  }catch(error){
+    const state=await page.locator('#stage').evaluate(stage=>{
+      const video=stage.querySelector('video');
+      return {fit:{...stage.dataset},label:stage.querySelector('#state-label').textContent,
+        message:stage.querySelector('#message-body').textContent,video:[video.videoWidth,video.videoHeight,video.currentTime]};
+    });
+    await preview('near-blocked');
+    throw new Error('Close live body: '+JSON.stringify(state)+' '+errors.join(' / '),{cause:error});
+  }
   const nearLive=await expectOverlay(p=>p.count>130&&p.y>p.height*.41);
   await preview('near-live');
   await page.locator('button[data-frame=face]').click();

@@ -310,7 +310,7 @@ async function startCamera(id) {
   try {
     if(!navigator.mediaDevices?.getUserMedia)throw new Error('این مرورگر دسترسی دوربین را روی این آدرس فعال نمی‌کند.');
     const videoStream=await navigator.mediaDevices.getUserMedia({
-      video:{width:{ideal:1280},height:{ideal:720},facingMode:{ideal:state.camera},frameRate:{ideal:30}},audio:false,
+      video:{width:{ideal:1280},height:{ideal:720},resizeMode:{ideal:'none'},facingMode:{ideal:state.camera},frameRate:{ideal:30}},audio:false,
     });
     if(id!==operation){videoStream.getTracks().forEach(t=>t.stop());return;}
     stream=videoStream;

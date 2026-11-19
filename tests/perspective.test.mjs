@@ -71,6 +71,14 @@ test('seated near-camera fit measures shoulders and keeps neckline behind a forw
   assert.ok(rig.hands.some(x=>x.front>.35));
 });
 
+test('a close face and the connected upper silhouette recover cropped shoulders',()=>{
+  const f=seatedFixture();
+  const rig=solveBody({...f,pose:null},'upper',camera,f.head);
+  assert.ok(rig?.volume&&rig.kind==='estimate');
+  assert.ok(rig.shoulder.every(p=>p.z<-.15));
+  assert.ok(rig.armQuality.every(c=>c===0));
+});
+
 test('the garment sockets share edges with the sleeves and the cuffs follow a bent arm',()=>{
   const f=seatedFixture(), rig=solveBody(f,'upper',camera,f.head);
   const item=catalog.find(x=>x.id==='orion'), shell=makeLiveShell(item,startingSize(item),0);

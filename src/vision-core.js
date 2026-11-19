@@ -52,17 +52,18 @@ export class VisionCore {
     throw err;
   }
   async warm(mode, method) {
-    const primary=await this.task(mode==='face'?'face':'pose',method);
+    const primary=await this.task(mode==='face'?'face':'pose',mode==='upper'?'IMAGE':method);
     return primary.delegate;
   }
   async frame(image,{mode, method, time, masks, fallback=false, headHint=false}) {
     const now=performance.now();
     const key=mode==='face'?'face':'pose';
-    const primary=await this.task(key,method);
+    const primaryMethod=mode==='upper'?'IMAGE':method;
+    const primary=await this.task(key,primaryMethod);
     const run=(k)=>(method==='VIDEO'?k.detectForVideo(image,time):k.detect(image));
     let pose=null, world=null, face=null, matrix=null, mask=null, underlyingError=null;
     if(key==='pose'){
-      const output=run(primary.task);
+      const output=primaryMethod==='IMAGE'?primary.task.detect(image):run(primary.task);
       pose=output.landmarks[0]??null;
       world=output.worldLandmarks[0]??null;
       output.close();
