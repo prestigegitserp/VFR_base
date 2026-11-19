@@ -1,6 +1,2 @@
 import { defineConfig } from 'vite';
-
-export default defineConfig({
-  base: './',
-  build: { target: 'es2022', chunkSizeWarningLimit: 750 },
-});
+export default defineConfig({ base: './', build: { target: 'es2022', chunkSizeWarningLimit: 800 }, worker: { format: 'iife' } });

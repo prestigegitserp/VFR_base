@@ -1,0 +1,37 @@
+name: Validate VFR Atelier
+
+on:
+  push:
+    branches: [v2]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vfr-atelier-validation
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run stage:models
+      - run: npm run build
+      - run: npx playwright install --only-shell chromium
+      - name: Exercise the three viewports and commercial workflow
+        run: |
+          mkdir -p .render
+          curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/pose.jpg -o .render/pose.jpg
+          curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/portrait.jpg -o .render/portrait.jpg
+          node tests/y4m-fixture.mjs .render/pose.jpg .render/camera.y4m
+          node tests/browser.mjs .render/pose.jpg .render/portrait.jpg .render/camera.y4m

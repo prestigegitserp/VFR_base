@@ -1,801 +1,659 @@
 import './style.css';
-import { asset, catalog, clamp, cuts, dimensions, fabrics, number, patternData, readPattern, recommendSize, sizes } from './catalog.js';
-import { Studio } from './studio.js';
-import { Calibration, containRect, PoseSmoother, projectRig, validPose } from './pose.js';
-import { getTracker } from './tracker.js';
+import { asset, catalog, cm, compatible, fabrics, fitModes, form, forms, metrics, show, startingSize } from './catalog.js';
+import { Atelier } from './atelier.js';
+import { Vision } from './vision.js';
+import { bodyRig, contain, faceRig, Temporal } from './tracking.js';
+import { drawMedia, layerFrame } from './composite.js';
+import { checkSize, chooseSize, manualProfile, TwoViewScan } from './sizing.js';
+import { listPackages, readBodyScan, storePackage, unpackPackage } from './protocol.js';
+import { lineFor, makeOrder } from './order.js';
 import { fillIcons, icon } from './icons.js';
-import { composite, paintInput } from './compositor.js';
 
-const $ = (id) => document.getElementById(id);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
-const stage = $('stage');
-const video = $('video');
-const picture = $('photo');
-const overlay = $('overlay').getContext('2d');
-const sourceAction = $('source-action');
-const freshMotion = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-const storeKey = 'vfr-studio:v1';
-const load = (key) => {
-  try { return JSON.parse(localStorage.getItem(`${storeKey}:${key}`)); } catch { return null; }
+const $=(id)=>document.getElementById(id);
+const $$=(sel)=>[...document.querySelectorAll(sel)];
+const el=(tag,content,cls)=>{
+  const n=document.createElement(tag);
+  if(content!=null)n.textContent=content;
+  if(cls)n.className=cls;
+  return n;
 };
-const save = (key, value) => {
-  try {
-    if (value == null) localStorage.removeItem(`${storeKey}:${key}`);
-    else localStorage.setItem(`${storeKey}:${key}`, JSON.stringify(value));
-  } catch { /* Browser storage can be disabled. */ }
+const stage=$('stage'), video=$('video'), img=$('photo'), canvas=$('render'), ctx=$('foreground').getContext('2d');
+const storage='vfr-atelier:v2:';
+const get=(key)=>{try{return JSON.parse(localStorage.getItem(storage+key));}catch{return null;}};
+const put=(key,value)=>{
+  try{ if(value==null)localStorage.removeItem(storage+key);else localStorage.setItem(storage+key,JSON.stringify(value)); }
+  catch{/* Preview and imports can run without local preferences. */}
 };
-const state = {
-  item: catalog[0], filter: 'all', size: 'M', color: 0, mode: 'studio', quality: 'balanced',
-  move: freshMotion, wind: false, near: false, compare: false, split: 50,
-  mirror: true, occlusion: true, skeleton: false, gestures: false, body: load('measurements'),
-  pose: null, goodAt: 0, cameraReady: false, busy: false, calibration: null,
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const state={
+  source:'studio',mode:'full',item:catalog[0],size:startingSize(catalog[0]),color:0,formId:catalog[0].form,formPinned:false,
+  body:get('profile'),preference:get('preference')??'regular',cart:get('cart')??[],filter:'all',records:new Map(),
+  move:!reduce,wind:false,turn:0,zoom:1,high:false,mirror:true,occlusion:true,debug:false,split:0,splitAt:50,apply:false,
+  busy:false,ready:false,tracked:null,mask:null,stamp:0,delegate:'',lastInfer:0,light:.50,scan:null,
 };
-try { state.custom = readPattern(load('pattern')); } catch { state.custom = null; }
-
-let studio;
-let generation = 0, stream, tracker, imageCanvas, objectURL;
-let taskOptions = Promise.resolve();
-let segmenting = false, canInfer = false, videoFrame = -1;
-let lastDetect = 0, inferenceMs = 0, timeout = 0, messageAction;
-let prevFrame = 0, meterStart = 0, frames = 0, gesture = {};
-let size = { width: 1, height: 1 };
-const smoother = new PoseSmoother();
+const vision=new Vision(), smoothPose=new Temporal(), smoothFace=new Temporal();
+const urls=new Map();
+let studio, stream, photoURL, frame=0, operation=0, display=0, pending=false, resultTime=0, lastFrame=-1;
+let commands=Promise.resolve(), metricsAt=0, reportCount=0, prev=0, noticeTimer, messageAction, guidanceAction;
+let bounds={w:1,h:1}, renderKey=null;
+const enqueue=(fn)=>{const p=commands.then(fn);commands=p.catch(()=>{});return p;};
+const gpu=()=>!!studio&&!studio.lost;
+const semantic=()=>state.occlusion||Boolean(state.scan);
+const source=()=>state.source==='live'&&video.readyState>=2?video:state.source==='photo'&&img.complete&&img.naturalWidth?img:null;
+const mediaSize=(m)=>[m?.videoWidth??m?.naturalWidth,m?.videoHeight??m?.naturalHeight];
+const sourceRect=(media)=>{
+  const [w,h]=mediaSize(media);
+  return w&&h?contain(w,h,bounds.w,bounds.h):null;
+};
 
 fillIcons();
 try {
-  studio = new Studio($('render'), (lost) => {
-    stage.dataset.renderer = lost ? 'fallback' : 'webgl';
-    if (lost) chooseMode('studio');
-    selectLook(state.item, false);
-    updateControls();
+  studio=new Atelier(canvas,(restored)=>{
+    stage.dataset.renderer=restored?'webgl':'flat';
+    if(!restored)changeSource('studio');
+    controls();
   });
-  stage.dataset.renderer = 'webgl';
-} catch (error) {
-  console.info('WebGL2 preview unavailable', error.message);
-  stage.dataset.renderer = 'fallback';
-}
-const gpu = () => studio && !studio.lost;
-
-function press(button, on) {
-  button.setAttribute('aria-pressed', String(Boolean(on)));
-}
-function signal(label, kind = '') {
-  if ($('signal').textContent !== label) $('signal').textContent = label;
-  const dot = $('signal-dot');
-  dot.classList.toggle('is-live', kind === 'live');
-  dot.classList.toggle('is-wait', kind === 'wait');
-}
-function showMessage(config) {
-  $('stage-message').hidden = !config;
-  if (!config) return;
-  $('message-icon').innerHTML = icon(config.icon ?? 'video');
-  $('message-title').textContent = config.title;
-  $('message-copy').textContent = config.copy;
-  $('message-action').hidden = !config.action;
-  $('message-action').textContent = config.button ?? 'دوباره تلاش کن';
-  messageAction = config.action;
-}
-$('message-action').addEventListener('click', () => messageAction?.());
-
-function toast(message) {
-  const target = $('toast');
-  target.textContent = message;
-  target.hidden = false;
-  clearTimeout(timeout);
-  timeout = setTimeout(() => { target.hidden = true; }, 3600);
+} catch(error) {
+  console.info('WebGL2',error.message);
+  stage.dataset.renderer='flat';
 }
 
-function list() {
-  const all = state.custom ? [...catalog, state.custom] : catalog;
-  return all.filter((look) => state.filter === 'all' || look.audience === state.filter);
+function press(node,value){node.setAttribute('aria-pressed',String(Boolean(value)));}
+function signal(text,kind=''){
+  if($('state-label').textContent!==text)$('state-label').textContent=text;
+  $('state-dot').className=kind;
 }
-function drawList(resetScroll = false) {
-  const host = $('garment-list');
-  const scroll = resetScroll ? 0 : host.scrollTop;
-  const options = list();
-  const fragment = document.createDocumentFragment();
-  for (const look of options) {
-    const el = $('card-template').content.firstElementChild.cloneNode(true);
-    const image = el.querySelector('img');
-    image.src = asset(`looks/${look.id === 'custom' ? look.cut : look.id}.webp`);
-    image.loading = options.indexOf(look) < 4 ? 'eager' : 'lazy';
-    el.dataset.look = look.id;
-    el.style.setProperty('--tile', look.tile);
-    el.title = look.description;
-    el.querySelector('strong').textContent = look.name;
-    el.querySelector('small').textContent = fabrics[look.fabric].label;
-    press(el, state.item.id === look.id);
-    fillIcons(el);
-    el.addEventListener('click', () => selectLook(look));
-    fragment.append(el);
+function message(title,body,config={}) {
+  $('message').hidden=!title;
+  if(!title)return;
+  $('message-title').textContent=title;$('message-body').textContent=body;
+  $('message-icon').innerHTML=icon(config.icon??'scan');
+  $('message-action').hidden=!config.click;
+  $('message-action').textContent=config.label??'دوباره تلاش کن';
+  messageAction=config.click;
+}
+function guide(text,action=null,label='') {
+  $('guidance').hidden=!text;
+  if(text&&$('guidance-text').textContent!==text)$('guidance-text').textContent=text;
+  $('guidance-action').hidden=!action;
+  $('guidance-action').textContent=label;
+  guidanceAction=action;
+}
+$('message-action').addEventListener('click',()=>messageAction?.());
+$('guidance-action').addEventListener('click',()=>guidanceAction?.());
+function toast(text){
+  const box=$('toast');box.hidden=false;box.textContent=text;clearTimeout(noticeTimer);
+  noticeTimer=setTimeout(()=>{box.hidden=true;},4200);
+}
+
+const items=()=>[...catalog,...[...state.records.values()].map((r)=>r.item)];
+function showList(change=false){
+  const host=$('look-list'), old=change?0:host.scrollTop;
+  const choices=items().filter((l)=>state.filter==='all'||(state.filter==='scan'?l.source==='scan':l.audience===state.filter));
+  const fragment=document.createDocumentFragment();
+  for(const item of choices){
+    const button=$('look-card').content.firstElementChild.cloneNode(true);
+    button.dataset.look=item.id;
+    button.title=item.description;
+    press(button,state.item.id===item.id);
+    button.querySelector('img').src=thumbnail(item);
+    button.querySelector('img').loading='lazy';
+    button.querySelector('strong').textContent=item.title;
+    button.querySelector('small').textContent=item.source==='scan'?item.english:fabrics[item.fabric].name;
+    fillIcons(button);
+    button.addEventListener('click',()=>select(item));
+    fragment.append(button);
   }
-  if (!options.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = 'قالب سفارشی بساز یا فایل اندازه‌های لباس را باز کن.';
-    const button = document.createElement('button');
-    button.className = 'secondary';
-    button.type = 'button';
-    button.textContent = 'ساخت قالب';
-    button.addEventListener('click', () => openDialog('pattern-dialog'));
-    empty.append(button);
-    fragment.append(empty);
-  }
+  if(!choices.length)fragment.append(el('div','از «ورود اسکن» بستهٔ نمونه یا فایل لباس را باز کن.','empty'));
   host.replaceChildren(fragment);
-  host.scrollTop = scroll;
-  $('item-count').textContent = `${number(options.length)} مدل`;
-  $$('.filters button').forEach((button) => press(button, button.dataset.filter === state.filter));
+  host.scrollTop=old;
+  $('look-count').textContent=`${show(choices.length)} مدل`;
+  $$('button[data-filter]').forEach(x=>press(x,x.dataset.filter===state.filter));
+}
+function thumbnail(item) {
+  if(item.source==='atelier')return asset(`looks/${item.id}.webp`);
+  if(urls.has(item.id))return urls.get(item.id);
+  return asset('looks/atelier.webp');
+}
+function poster(){
+  const n=$('poster');
+  n.src=state.item.id==='terra'&&state.mode==='full'?asset('looks/atelier.webp'):thumbnail(state.item);
+  n.alt=`پیش‌نمایش ${state.item.title}`;
 }
 
-function fitIndicator() {
-  const fit = recommendSize(state.item, state.body ?? {});
-  const cm = dimensions(state.item, state.size);
-  const compare = fit === 'outside' ? 'سایز مناسب در مجموعهٔ فعلی پیدا نشد.'
-    : fit ? `پیشنهاد ${state.body.source === 'camera' ? 'تقریبی' : 'سایز'}: ${fit}`
-      : `قد لباس ${number(cm.length)} سانتی‌متر`;
-  $('fit-state').textContent = compare;
+const verdicts={
+  match:['سازگار با اندازه‌های واردشده','بازهٔ آزادی همهٔ اندازه‌های این سایز در محدودهٔ تعریف‌شده است.'],
+  estimate:['سازگار در برآورد دوربین','برای سفارش، اندازه‌ها را با متر بررسی کن.'],
+  borderline:['تن‌خور مرزی','دست‌کم یک اندازه نزدیک حد بازه است. جدول را باز کن.'],
+  incompatible:['این سایز مناسب نیست','یکی از ابعاد از بازهٔ آزادی خارج است.'],
+  insufficient:['اندازه‌های بیشتری لازم است','پیشنهاد سایز بعد از تکمیل اندازه‌های موردنیاز نمایش داده می‌شود.'],
+};
+const measures=()=>checkSize(state.item,state.size,state.body,state.preference);
+function fitBadge(){
+  const result=measures(), advice=chooseSize(state.item,state.body,state.preference);
+  const [title,copy]=verdicts[result.status];
+  $('fit-badge').dataset.status=result.status;$('fit-title').textContent=title;
+  $('fit-copy').textContent=advice&&['match','estimate','borderline'].includes(advice.status)&&advice.size!==state.size
+    ? `سایز قابل بررسی ${advice.size.label} · ${copy}` : copy;
 }
-
-function updateLook() {
-  const { item, color, size: selected } = state;
-  const cut = cuts[item.cut], fabric = fabrics[item.fabric];
-  $('stage-look').textContent = $('look-name').textContent = item.name;
-  $('stage-fabric').textContent = `${fabric.label} · ${item.names[color]}`;
-  $('look-cut').textContent = `${cut.label} · ${fabric.label}`;
-  $$('.look-card').forEach((button) => press(button, button.dataset.look === item.id));
-  const swatches = item.colors.map((value, i) => {
-    const b = document.createElement('button');
-    b.className = 'swatch';
-    b.type = 'button';
-    b.style.setProperty('--swatch', value);
-    b.title = item.names[i];
-    b.setAttribute('aria-label', item.names[i]);
-    press(b, color === i);
-    b.addEventListener('click', () => changeVariant({ color: i }));
-    return b;
-  });
-  $('swatches').replaceChildren(...swatches);
-  const buttons = sizes.map((size) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = size;
-    press(b, selected === size);
-    b.addEventListener('click', () => changeVariant({ size }));
-    return b;
-  });
-  $('sizes').replaceChildren(...buttons);
-  const original = item.id === 'luna';
-  const poster = $('poster');
-  poster.src = asset(`looks/${original ? 'studio' : item.id === 'custom' ? item.cut : item.id}.webp`);
-  poster.dataset.look = original ? 'studio' : 'garment';
-  poster.alt = original ? 'مانکن استودیو با پیراهن لونا' : `رندر ${item.name}`;
-  fitIndicator();
-  updateControls();
+function product(){
+  const {item,size,color}=state;
+  $('item-title').textContent=$('stage-label').textContent=item.title;
+  const type=fabrics[item.fabric].name;
+  $('item-sub').textContent=`${type} · ${size.sku}`;
+  $('stage-caption').textContent=`${type} · ${item.colors[color].label}`;
+  $('size-select').replaceChildren(...item.sizes.map(s=>new Option(s.label,s.sku,false,s===size)));
+  $('colors').replaceChildren(...item.colors.map((swatch,i)=>{
+    const b=el('button');b.type='button';b.style.setProperty('--swatch',swatch.value);
+    b.setAttribute('aria-label',swatch.label);b.title=swatch.label;press(b,i===color);
+    b.addEventListener('click',()=>{state.color=i;product();updateLook(false);});return b;
+  }));
+  $$('.look').forEach(b=>press(b,b.dataset.look===item.id));
+  poster();fitBadge();
 }
-
-function selectLook(item, resetVariant = true) {
-  state.item = item;
-  if (resetVariant) Object.assign(state, { color: 0, size: 'M' });
-  studio?.change(state.item, state.size, state.color);
-  updateLook();
+function controls(){
+  const demo=state.source==='studio', supported=gpu(), hasFrame=demo||Boolean(source());
+  $('stage').dataset.source=state.source;
+  $('stage').dataset.frame=state.mode;
+  $$('button[data-source]').forEach(b=>press(b,b.dataset.source===state.source));
+  $$('button[data-frame]').forEach(b=>press(b,b.dataset.frame===state.mode));
+  $('motion').disabled=!demo||!supported;$('turn').disabled=!demo||!supported;
+  $('wind').disabled=!supported||!['dress','skirt','coat'].includes(state.item.cut)||state.item.source==='scan'||!hasFrame;
+  $('compare').disabled=!supported||!hasFrame;
+  $('capture').disabled=!hasFrame;
+  press($('motion'),state.move);press($('wind'),state.wind&&!$('wind').disabled);press($('compare'),state.split>0&&!$('compare').disabled);
+  $('split').hidden=!(state.split&&hasFrame&&supported);
+  $('split').style.setProperty('--split',`${state.splitAt}%`);
 }
-
-function changeVariant(values) {
-  Object.assign(state, values);
-  studio?.change(state.item, state.size, state.color);
-  updateLook();
-  // Keep keyboard focus on the updated size or color button.
-  if (values.size) $('sizes').querySelector('[aria-pressed=true]')?.focus({ preventScroll: true });
-  else $('swatches').querySelector('[aria-pressed=true]')?.focus({ preventScroll: true });
+function currentForm(){
+  const f=form(state.formId);
+  if(!state.apply||!state.body)return f;
+  return {...f,measure:Object.fromEntries(Object.entries(f.measure).map(([key,value])=>[key,state.body.measures?.[key]?.value??value]))};
 }
-$$('.filters button').forEach((b) => b.addEventListener('click', () => {
-  state.filter = b.dataset.filter;
-  drawList(true);
-}));
-
-function updateControls() {
-  const live = state.mode === 'live';
-  const photo = state.mode === 'photo';
-  const hasImage = live ? state.cameraReady : photo ? Boolean(imageCanvas && picture.src && !picture.hidden) : true;
-  const supported = Boolean(gpu());
-  $$('.modes button').forEach((button) => press(button, button.dataset.mode === state.mode));
-  $('motion').hidden = live || photo;
-  $('motion').disabled = !supported;
-  $('near').disabled = !supported || live || photo;
-  $('wind').disabled = !supported || !['dress', 'coat', 'skirt'].includes(cuts[state.item.cut].family) || !hasImage;
-  $('compare').disabled = !supported || !hasImage;
-  $('capture').disabled = !hasImage;
-  press($('motion'), state.move);
-  press($('near'), state.near);
-  press($('wind'), state.wind && !$('wind').disabled);
-  press($('compare'), state.compare && !$('compare').disabled);
-  $('compare-ui').hidden = !state.compare || $('compare').disabled;
-  $('compare-ui').style.setProperty('--split', `${state.split}%`);
-  sourceAction.disabled = live && state.busy && !stream;
-  const key = live ? (state.busy || stream ? 'stop' : 'video') : photo ? 'upload' : 'video';
-  const text = key === 'stop' ? 'خاموش‌کردن دوربین' : photo ? 'انتخاب عکس' : 'روشن‌کردن دوربین';
-  sourceAction.innerHTML = `<i>${icon(key)}</i> ${text}`;
+async function updateLook(updateForm) {
+  const id=++display;
+  if(!studio)return;
+  try {
+    if(updateForm||!studio.avatar)await studio.body(currentForm());
+    if(id!==display)return;
+    const bytes=state.records.get(state.item.id)?.files[state.size.model];
+    const ok=await studio.garment(state.item,state.size,state.color,bytes);
+    if(!ok||id!==display)return;
+    if(!studio.lost)stage.dataset.renderer='webgl';
+    if(state.source==='studio'){
+      if(studio.lost)signal('رندر کاتالوگ');
+      else{signal('مانکن سه‌بعدی','ready');message();}
+    }
+  }catch(error){
+    if(id!==display)return;
+    if(state.source==='studio'){
+      stage.dataset.renderer='flat';
+      signal('رندر کاتالوگ','pending');
+    }
+    toast(error.message);
+  }
+  controls();
 }
-
-function setMode(mode) {
-  state.mode = mode;
-  state.pose = null;
-  state.cameraReady = false;
-  state.busy = false;
-  state.calibration = null;
-  state.compare = false;
-  state.goodAt = 0;
-  segmenting = canInfer = false;
-  inferenceMs = 0;
-  videoFrame = -1;
-  gesture = {};
-  smoother.clear();
-  stage.dataset.mode = mode;
-  video.hidden = mode !== 'live' || !stream;
-  picture.hidden = mode !== 'photo' || !imageCanvas;
-  studio?.setMode(mode);
-  showMessage(null);
-  hint(null);
-  updateControls();
+function select(item,adjust=true){
+  state.item=item;state.size=chooseSize(item,state.body,state.preference)?.size??startingSize(item);
+  state.color=0;state.wind=false;
+  if(!state.formPinned){state.formId=item.form;$('form-select').value=item.form;}
+  if(adjust&&!compatible(item,state.mode))changeFrame(item.frame,false);
+  product();controls();
+  updateLook(true);
 }
+$('size-select').addEventListener('change',(e)=>{
+  state.size=state.item.sizes.find(s=>s.sku===e.currentTarget.value)??state.size;
+  product();updateLook(false);
+});
+$$('button[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;showList(true);}));
 
-function stopStream() {
-  stream?.getTracks().forEach((track) => track.stop());
-  stream = null;
-  video.pause();
-  video.srcObject = null;
-  video.hidden = true;
+function resetVision() {
+  state.ready=false;state.tracked=null;state.mask=null;state.stamp=0;
+  state.lastInfer=0;state.delegate='';
+  delete stage.dataset.mask;delete stage.dataset.vision;
+  smoothPose.clear();smoothFace.clear();
+  lastFrame=-1;
+  guide(null);message();
 }
-
-function chooseMode(mode) {
-  const id = ++generation;
-  stopStream();
-  setMode(mode);
-  if (mode === 'studio') {
-    signal(gpu() ? 'پیش‌نمایش سه‌بعدی' : 'رندر ثابت', gpu() ? 'live' : '');
+function stop() {
+  stream?.getTracks().forEach((t)=>t.stop());
+  stream=null;
+  video.pause();video.srcObject=null;video.hidden=true;
+}
+function changeSource(mode) {
+  const id=++operation;
+  stop();
+  resetVision();
+  state.source=mode;state.busy=false;state.split=0;state.scan=null;
+  video.hidden=true;img.hidden=mode!=='photo'||!photoURL;
+  studio?.setSource(mode);
+  controls();
+  if(mode==='studio'){
+    signal(studio?.avatar&&!studio.lost?'مانکن سه‌بعدی':'رندر کاتالوگ',studio?.avatar&&!studio.lost?'ready':'');
     return;
   }
-  if (!gpu()) {
-    signal('نمایش سه‌بعدی در دسترس نیست', 'wait');
-    showMessage({
-      icon: 'cube', title: 'مرورگر به WebGL2 دسترسی ندارد',
-      copy: 'برای پرو زنده، شتاب‌دهی سخت‌افزاری مرورگر را فعال کن. رندر لباس‌ها در استودیو قابل مشاهده است.',
-      action: () => chooseMode('studio'), button: 'نمایش رندرها',
-    });
+  if(!gpu()){
+    signal('شتاب‌دهی گرافیکی غیرفعال است','pending');
+    message('مرورگر به WebGL2 نیاز دارد','رندرهای کاتالوگ و جدول تناسب در حالت مانکن در دسترس‌اند.',
+      {label:'بازگشت به مانکن',click:()=>changeSource('studio'),icon:'cube'});
     return;
   }
-  if (mode === 'live') {
-    startCamera(id);
-  } else if (imageCanvas) {
-    runPhoto(id);
-  } else {
-    signal('عکس را انتخاب کن');
-    showMessage({
-      icon: 'image', title: 'پرو روی عکس',
-      copy: 'عکسی روبه‌رو با شانه‌ها و لگن مشخص انتخاب کن.',
-      action: pickPhoto, button: 'انتخاب عکس',
-    });
+  if(mode==='live')startCamera(id);
+  else if(photoURL)analyzePhoto(id);
+  else {
+    signal('آمادهٔ انتخاب عکس');
+    message('پرو روی عکس','یک عکس روشن و روبه‌رو با قاب مناسب انتخاب کن.',{icon:'image',label:'انتخاب عکس',click:pickPhoto});
   }
 }
-
-function enqueueOptions(delegate, mode, masks) {
-  const next = taskOptions.then(() => delegate.options(mode, masks));
-  taskOptions = next.catch(() => {});
-  return next;
-}
-
-async function syncCameraOptions(id = generation) {
-  if (!tracker || !state.cameraReady || id !== generation || state.mode !== 'live') return;
-  const masks = Boolean(state.calibration);
-  canInfer = false;
-  await enqueueOptions(tracker, 'VIDEO', masks);
-  if (id !== generation || state.mode !== 'live' || masks !== Boolean(state.calibration)) return;
-  segmenting = masks;
-  canInfer = true;
-  if (masks && !state.calibration.started) state.calibration.started = performance.now();
+function changeFrame(mode,selectCompatible=true) {
+  if(mode===state.mode)return;
+  state.mode=mode;state.turn=0;state.zoom=1;$('zoom').value='100';
+  const id=++operation;
+  const needsCamera=state.source==='live'&&!stream&&state.busy;
+  state.scan=null;state.split=0;
+  resetVision();
+  if(selectCompatible&&!compatible(state.item,mode)){
+    const item=items().find(l=>compatible(l,mode)&&l.frame===mode)??catalog[0];
+    if(state.filter!=='all'){state.filter='all';showList(true);}
+    select(item,false);
+  }
+  if(state.source==='live'&&stream)setupCamera(id);
+  else if(needsCamera)startCamera(id);
+  else if(state.source==='photo'&&photoURL)analyzePhoto(id);
+  poster();controls();
 }
 
 async function startCamera(id) {
-  state.busy = true;
-  updateControls();
-  signal('در انتظار دوربین', 'wait');
-  showMessage({ title: 'دسترسی دوربین را تأیید کن', copy: 'فقط تصویر وب‌کم در مرورگر باز می‌شود.' });
-  if (!navigator.mediaDevices?.getUserMedia) {
-    cameraFailure(new Error('SecureContext'), id);
-    return;
-  }
-  const model = getTracker();
-  model.catch(() => {});
+  state.busy=true;
+  signal('در انتظار اجازهٔ دوربین','pending');
+  message('دوربین را فعال کن','درخواست مرورگر را تأیید کن تا قاب زنده باز شود.',{icon:'video'});
   try {
-    const device = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: 'user' },
-      audio: false,
+    if(!navigator.mediaDevices?.getUserMedia)throw new Error('این مرورگر دسترسی دوربین را روی این آدرس فعال نمی‌کند.');
+    const videoStream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:'user',frameRate:{ideal:30}},audio:false,
     });
-    if (id !== generation) {
-      device.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    stream = device;
-    video.srcObject = device;
-    video.classList.toggle('mirrored', state.mirror);
-    video.hidden = false;
-    updateControls();
+    if(id!==operation){videoStream.getTracks().forEach(t=>t.stop());return;}
+    stream=videoStream;
+    video.srcObject=stream;video.hidden=false;
+    video.classList.toggle('is-mirror',state.mirror);
     await video.play();
-    device.getVideoTracks()[0]?.addEventListener('ended', () => cameraFailure(new Error('CameraEnded'), id), { once: true });
-    if (id !== generation) return;
-    signal('بارگذاری مدل بدن', 'wait');
-    showMessage({ icon: 'scan', title: 'مدل بدن در حال بارگذاری است', copy: 'در این فاصله، کمی از دوربین فاصله بگیر تا شانه و لگن در قاب باشند.' });
-    const ready = await model;
-    if (id !== generation) return;
-    tracker = ready;
-    state.cameraReady = true;
-    state.busy = false;
-    await syncCameraOptions(id);
-    if (id !== generation) return;
-    signal('منتظر قرار گرفتن در قاب', 'wait');
-    showMessage(null);
-    updateControls();
-  } catch (error) {
-    cameraFailure(error, id);
-  }
+    stream?.getVideoTracks()[0]?.addEventListener('ended',()=>{if(state.source==='live')fail(new Error('جریان دوربین قطع شد.'),operation);},{once:true});
+    if(id===operation)await setupCamera(id);
+  }catch(e){fail(e,id);}
 }
-
-function cameraFailure(error, id) {
-  if (id !== generation) return;
-  console.info('Camera fitting:', error.name, error.message);
-  stopStream();
-  state.busy = state.cameraReady = canInfer = false;
-  state.pose = state.calibration = null;
-  hint(null);
-  const causes = {
-    NotAllowedError: 'دسترسی دوربین در تنظیمات این صفحه محدود شده. بعد از اجازه دادن دوباره امتحان کن.',
-    NotFoundError: 'یک وب‌کم به دستگاه وصل کن و دوباره تلاش کن.',
-    NotReadableError: 'ممکن است دوربین در برنامهٔ دیگری باز باشد. آن برنامه را ببند و دوباره تلاش کن.',
+async function setupCamera(id){
+  state.busy=true;
+  signal('بارگذاری مدل تشخیص','pending');
+  const m=fitModes[state.mode];
+  message(m.title,m.description);
+  try{
+    const mode=state.mode;
+    const delegate=await enqueue(()=>vision.warm(mode,'VIDEO'));
+    if(id!==operation)return;
+    state.delegate=delegate;state.ready=true;state.busy=false;
+    message();controls();
+  }catch(e){fail(e,id);}
+}
+function fail(error,id){
+  if(id!==operation)return;
+  const live=state.source==='live';
+  if(live)stop();
+  resetVision();state.busy=false;state.scan=null;
+  const common={
+    NotAllowedError:'اجازهٔ دوربین برای این صفحه صادر نشده است.',
+    NotFoundError:'دوربین متصل پیدا نشد.',
+    NotReadableError:'دوربین در برنامه‌ای دیگر در حال استفاده است.',
   };
-  signal('اتصال دوربین برقرار نیست', 'wait');
-  showMessage({
-    title: 'اتاق پرو دوربینی آماده نیست',
-    copy: causes[error.name] ?? (error.message === 'SecureContext'
-      ? 'حالت دوربین نیاز به صفحهٔ امن HTTPS یا localhost دارد.'
-      : 'بارگذاری مدل یا جریان دوربین کامل نشد. دوباره تلاش کن یا از یک عکس استفاده کن.'),
-    action: () => chooseMode('live'),
-  });
-  updateControls();
+  const info=common[error.name]??(live?'دوربین یا مدل تشخیص آماده نشد.':error.message);
+  signal('تشخیص آماده نیست','pending');
+  message(live?'اتصال دوربین برقرار نشد':'عکس تحلیل نشد',info,
+    {icon:live?'video':'image',click:live?()=>changeSource('live'):pickPhoto,label:live?'اتصال دوباره':'انتخاب عکس دیگر'});
 }
 
-function pickPhoto() {
-  if (!gpu()) return;
-  $('photo-input').value = '';
-  $('photo-input').click();
-}
-$('photo-input').addEventListener('change', async (event) => {
-  const file = event.currentTarget.files[0];
-  if (!file) return;
-  if (file.size > 24_000_000 || !/^image\//.test(file.type)) {
-    toast('یک عکس با حجم کمتر از ۲۴ مگابایت انتخاب کن.');
-    return;
-  }
-  const id = ++generation;
-  stopStream();
-  setMode('photo');
-  state.pose = null;
-  const url = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    image.src = url;
-    await image.decode();
-    if (generation !== id) { URL.revokeObjectURL(url); return; }
-    const scale = Math.min(1, 1440 / Math.max(image.naturalWidth, image.naturalHeight));
-    const input = document.createElement('canvas');
-    input.width = Math.round(image.naturalWidth * scale);
-    input.height = Math.round(image.naturalHeight * scale);
-    input.getContext('2d').drawImage(image, 0, 0, input.width, input.height);
-    if (objectURL) URL.revokeObjectURL(objectURL);
-    objectURL = url;
-    picture.src = url;
-    picture.hidden = false;
-    imageCanvas = input;
-    updateControls();
-    await runPhoto(id);
-  } catch {
-    URL.revokeObjectURL(url);
-    if (id === generation) toast('این تصویر باز نشد. یک فایل JPEG یا PNG امتحان کن.');
-  }
+function pickPhoto(){$('photo-file').value='';$('photo-file').click();}
+$('photo-file').addEventListener('change',async(e)=>{
+  const file=e.currentTarget.files[0];
+  if(!file)return;
+  if(!file.type.startsWith('image/')||file.size>24_000_000){toast('عکس JPEG، PNG، WebP یا AVIF تا ۲۴ مگابایت انتخاب کن.');return;}
+  const url=URL.createObjectURL(file);
+  const test=new Image();test.src=url;
+  try{
+    await test.decode();
+    if(state.source!=='photo'){URL.revokeObjectURL(url);return;}
+    if(photoURL)URL.revokeObjectURL(photoURL);
+    photoURL=url;img.src=url;img.hidden=false;
+    await img.decode();
+    const id=++operation;
+    resetVision();controls();
+    await analyzePhoto(id);
+  }catch{if(photoURL!==url)URL.revokeObjectURL(url);toast('عکس باز نشد. فایل JPEG یا PNG امتحان کن.');}
 });
-
-function rectFor(mode = state.mode) {
-  const width = mode === 'live' ? video.videoWidth : imageCanvas?.width;
-  const height = mode === 'live' ? video.videoHeight : imageCanvas?.height;
-  if (!width || !height) return null;
-  return containRect(width, height, size.width, size.height);
+async function analyzePhoto(id){
+  const mode=state.mode;
+  state.busy=true;
+  signal('تحلیل عکس','pending');
+  message('تحلیل قاب عکس',fitModes[mode].description,{icon:'image'});
+  try{
+    await enqueue(()=>vision.warm(mode,'IMAGE'));
+    if(id!==operation)return;
+    const result=await enqueue(()=>vision.infer(img,{mode,method:'IMAGE',time:performance.now(),masks:semantic(),fallback:true}));
+    if(id!==operation)return;
+    applyTracking(result,performance.now());
+    state.ready=true;state.busy=false;
+    const rig=project();
+    if(rig){signal('پرو روی عکس','ready');message();}
+    else {signal('قاب مناسب پیدا نشد','pending');message(fitModes[mode].title,fitModes[mode].description,{icon:'image',click:pickPhoto,label:'انتخاب عکس دیگر'});}
+  }catch(e){fail(e,id);}
 }
 
-async function runPhoto(id) {
-  signal('بررسی عکس', 'wait');
-  showMessage({ icon: 'scan', title: 'شناسایی وضعیت بدن', copy: 'داریم شانه‌ها، لگن و اندام‌ها را در تصویر پیدا می‌کنیم.' });
-  try {
-    const ready = await getTracker();
-    if (id !== generation) return;
-    await enqueueOptions(ready, 'IMAGE', false);
-    if (id !== generation) return;
-    ready.image(imageCanvas, (result) => {
-      const pose = result.landmarks[0];
-      if (validPose(pose)) {
-        state.pose = pose;
-        showMessage(null);
-        signal('پرو روی عکس', 'live');
-      } else {
-        state.pose = null;
-        signal('بدن کامل پیدا نشد', 'wait');
-        showMessage({ icon: 'image', title: 'شانه‌ها و لگن باید در عکس باشند', copy: 'یک عکس روبه‌رو و با نور یکنواخت انتخاب کن.', action: pickPhoto, button: 'انتخاب عکس دیگر' });
-      }
-    });
-  } catch (error) {
-    console.info('Image fitting:', error.message);
-    if (id !== generation) return;
-    signal('تحلیل عکس متوقف شد', 'wait');
-    showMessage({ icon: 'image', title: 'بارگذاری مدل بدن کامل نشد', copy: 'با اتصال پایدار دوباره امتحان کن.', action: () => runPhoto(generation) });
+function applyTracking(result,at){
+  state.delegate=result.delegate;state.lastInfer=result.timeMs;
+  stage.dataset.vision=vision.worker?'worker':'main';
+  if(result.mask)stage.dataset.mask='ready';
+  const {pose,face,mask,matrix}=result;
+  state.tracked={pose:pose?smoothPose.update(pose,at):null,face:face?smoothFace.update(face,at):null,matrix,
+    mask:mask??state.mask};
+  if(mask)state.mask=mask;
+  if(pose||face)state.stamp=at;
+  if(state.scan&&mask&&pose){
+    const [w,h]=mediaSize(video);
+    const next=state.scan.sensor;
+    next.ingest(pose,mask,w/h);
+    const profile=next.result();
+    if(profile){state.body=profile;state.scan=null;put('profile',profile);fitBadge();toast('برآورد روبه‌رو و نیم‌رخ ذخیره شد.');}
   }
 }
 
-function hint(content) {
-  const el = $('stage-guidance');
-  el.hidden = !content;
-  if (content && el.textContent !== content) el.textContent = content;
+function project() {
+  const rect=sourceRect(source());
+  if(!state.tracked||!rect)return null;
+  const stages=state.tracked;
+  return state.mode==='face'
+    ? faceRig(stages.face,stages.matrix,rect,bounds,state.source==='live'&&state.mirror,state.body)
+    : bodyRig(stages,state.mode,rect,bounds,state.source==='live'&&state.mirror,studio?.reference??{torso:.45,shoulder:400},state.body);
+}
+function sense(now){
+  if(!state.ready||pending||video.readyState<2||video.currentTime===lastFrame||now-resultTime<Math.max(state.high?39:52,state.lastInfer*.93))return;
+  pending=true;lastFrame=video.currentTime;resultTime=now;
+  const id=operation, mode=state.mode;
+  const masks=semantic()&&(state.scan||mode==='upper'&&frame%2===0||frame%3===0);
+  enqueue(()=>vision.infer(video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper'}))
+    .then(result=>{if(id===operation)applyTracking(result,performance.now());})
+    .catch(e=>{if(id===operation)fail(e,id);})
+    .finally(()=>{pending=false;});
 }
 
-function completeCalibration(measurements) {
-  const height = state.calibration?.sensor.height;
-  state.calibration = null;
-  syncCameraOptions().catch((error) => cameraFailure(error, generation));
-  if (measurements) {
-    state.body = { ...measurements, height, source: 'camera' };
-    save('measurements', state.body);
-    fitIndicator();
-    toast('برآورد بدن به «اندازه‌های من» اضافه شد.');
-  } else {
-    toast('برآورد کامل نشد. قد کامل، روبه‌رو و با دست‌های باز دوباره امتحان کن.');
+const exposure=document.createElement('canvas');exposure.width=9;exposure.height=9;
+const exposureCtx=exposure.getContext('2d',{willReadFrequently:true});
+function light(media) {
+  if(!media)return;
+  try{
+    exposureCtx.drawImage(media,0,0,9,9);
+    const data=exposureCtx.getImageData(0,0,9,9).data;
+    let avg=0;
+    for(let i=0;i<data.length;i+=4)avg+=data[i]*.25+data[i+1]*.61+data[i+2]*.14;
+    state.light=state.light*.8+avg/(81*255)*.2;
+  }catch{/* A delayed camera frame may not be available for light estimation yet. */}
+}
+function scanPrompt(now){
+  if(!state.scan)return false;
+  const {sensor,deadline}=state.scan;
+  if(now>deadline){
+    state.scan=null;toast('هر دو نما کامل نشدند. لباس جذب، نور یکنواخت یا اندازه‌های مترخورده را امتحان کن.');
+    return false;
   }
+  if(sensor.view==='turn'){guide('نمای روبه‌رو ثبت شد. یک‌چهارم دور بچرخ و در قاب بمان.',()=>{
+    sensor.view='side';state.scan.deadline=performance.now()+26000;
+  },'شروع نیم‌رخ');}
+  else {
+    const count=show(sensor[sensor.view].length);
+    guide(`${sensor.view==='front'?'روبه‌رو بایست و دست‌ها را کمی باز کن':'به پهلو بایست و ثابت بمان'} · ${count} از ۸`,()=>{
+      state.scan=null;guide(null);
+    },'لغو');
+  }
+  return true;
 }
 
-function sense(now) {
-  const interval = Math.max(state.quality === 'high' ? 42 : 64, inferenceMs * 1.35);
-  if (!canInfer || video.readyState < 2 || now - lastDetect < interval || video.currentTime === videoFrame) return;
-  videoFrame = video.currentTime;
-  lastDetect = now;
-  const id = generation;
-  const begin = performance.now();
-  try {
-    tracker.video(video, now, (result) => {
-      const current = result.landmarks[0];
-      if (!validPose(current)) return;
-      state.pose = smoother.update(current, now);
-      state.goodAt = now;
-      const scan = state.calibration;
-      if (scan && segmenting) {
-        try {
-          scan.sensor.push(current, result.segmentationMasks?.[0], video.videoWidth / video.videoHeight);
-          const measured = scan.sensor.result();
-          if (measured) completeCalibration(measured);
-        } catch (error) {
-          console.info('Calibration mask:', error.message);
-          completeCalibration(null);
-        }
-      }
-    });
-    inferenceMs = inferenceMs * .66 + (performance.now() - begin) * .34;
-  } catch (error) {
-    cameraFailure(error, id);
-  }
+function resize(){
+  bounds={w:stage.clientWidth,h:stage.clientHeight};
+  if(gpu()&&bounds.w&&bounds.h)studio.resize(bounds.w,bounds.h,state.high);
 }
-
-function shiftLook(delta) {
-  const options = list();
-  if (!options.length) return;
-  const at = options.findIndex((look) => look.id === state.item.id);
-  const next = options[(Math.max(0, at) + options.length + delta) % options.length];
-  selectLook(next);
-  const card = $$('.look-card').find((el) => el.dataset.look === next.id);
-  const listHost = $('garment-list');
-  if (card) {
-    const a = card.getBoundingClientRect(), b = listHost.getBoundingClientRect();
-    if (a.top < b.top || a.bottom > b.bottom) listHost.scrollTop += a.top - b.top;
-  }
-}
-function gestureHint(pose, now) {
-  if (!state.gestures || !pose) return null;
-  const held = [0, 1].filter((i) => pose.armVisibility[i] && pose.wrists[i].y > pose.shoulders[i].y + .17);
-  if (held.length !== 1) {
-    gesture = {};
-    return null;
-  }
-  const side = held[0];
-  if (gesture.side !== side) gesture = { side, begin: now, fired: false };
-  if (gesture.fired) return 'برای تعویض دوباره، اول دست را پایین بیاور.';
-  const progress = Math.min(100, (now - gesture.begin) / 9.5);
-  if (progress >= 100) {
-    shiftLook(side ? 1 : -1);
-    gesture.fired = true;
-  }
-  return `دست را نگه دار · ${number(progress)}٪`;
-}
-
-function refreshStage() {
-  size = { width: Math.round(stage.clientWidth), height: Math.round(stage.clientHeight) };
-  if (size.width && size.height) studio?.resize(size.width, size.height, state.quality);
-}
-new ResizeObserver(refreshStage).observe(stage);
-refreshStage();
-
-function animate(now) {
+new ResizeObserver(resize).observe(stage);
+resize();
+function animate(now){
   requestAnimationFrame(animate);
-  if (!gpu() || document.hidden || !size.width || !size.height) return;
-  const dt = clamp((now - prevFrame) / 1000, 1 / 200, .046);
-  prevFrame = now;
-  const live = state.mode === 'live', photo = state.mode === 'photo';
-  if (live && state.cameraReady) {
+  if(!gpu()||document.hidden||!bounds.w||!bounds.h)return;
+  const dt=Math.max(.003,Math.min(.045,(now-prev)/1000));
+  prev=now;frame++;
+  if(state.source==='live'&&state.ready){
     sense(now);
-    const scan = state.calibration;
-    if (scan?.started && now - scan.started > 21000) completeCalibration(null);
-    if (state.pose && now - state.goodAt > 470) {
-      state.pose = null;
-      smoother.clear();
-      gesture = {};
+    if(state.stamp&&now-state.stamp>730){
+      state.tracked=null;state.mask=null;smoothPose.clear();smoothFace.clear();
     }
-    const found = Boolean(state.pose);
-    signal(found ? 'ردیابی فعال' : 'منتظر قرار گرفتن در قاب', found ? 'live' : 'wait');
   }
-  const rect = live || photo ? rectFor() : null;
-  const activePose = rect && state.pose
-    ? projectRig(state.pose, rect, size.width, size.height, live && state.mirror) : null;
-  if (live && (state.cameraReady || state.calibration)) {
-    const scan = state.calibration;
-    hint(scan ? `تمام‌قد روبه‌رو بایست و دست‌ها را کمی باز کن · ${number(scan.sensor.samples.length)} از ${number(Calibration.count)}`
-      : gestureHint(activePose, now) ?? (!activePose ? 'برای پرو، شانه‌ها و لگن را در قاب بگذار.' : null));
+  const key=state.source==='studio'&&!state.move&&!state.wind
+    ? [display,studio.wear?.group.uuid,studio.avatar?.model.uuid,bounds.w,bounds.h,state.split,state.splitAt,state.turn,state.zoom,state.mode,state.high,state.debug].join('|')
+    : null;
+  if(key&&key===renderKey)return;
+  renderKey=key;
+  const media=source(), rect=sourceRect(media);
+  const rig=project();
+  if(state.source==='live'&&state.ready){
+    signal(rig?.kind==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب',rig?'ready':'pending');
+    if(!scanPrompt(now))guide(!rig?fitModes[state.mode].title : state.mode==='full'&&!rig.full?'برای حرکت دامن، پاها هم در قاب باشند.':null);
   }
-  studio.update({ dt, activePose, move: state.move, wind: state.wind && !$('wind').disabled, near: state.near, zoom: 1, quality: state.quality });
-  studio.draw(state.compare ? state.split / 100 : 0);
-  const input = live && video.readyState >= 2 ? video : photo ? imageCanvas : null;
-  composite(overlay, studio, {
-    showSkeleton: state.skeleton, occlusion: state.occlusion, input, rect,
-    mirror: live && state.mirror, sleeve: cuts[state.item.cut].sleeve,
+  if(frame%15===0)light(media);
+  studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,lightValue:state.light,reduce});
+  studio.draw(state.split?state.splitAt/100:0);
+  layerFrame(ctx,studio,{
+    source:media,rect,mirror:state.source==='live'&&state.mirror,mode:state.mode,rig,
+    mask:state.occlusion?state.mask:null,debug:state.debug,
+    sleeve:['coat','jacket','knit'].includes(state.item.cut),
   });
-  frames++;
-  if (now - meterStart > 950) {
-    const fps = Math.round(frames * 1000 / (now - meterStart));
-    $('stage-meter').textContent = meterStart && fps
-      ? `${live && state.cameraReady && tracker ? tracker.delegate + ' POSE · ' : ''}WEBGL · ${fps} FPS` : '';
-    frames = 0;
-    meterStart = now;
+  reportCount++;
+  if(now-metricsAt>1050){
+    $('telemetry').textContent=metricsAt?
+      (state.ready&&state.source!=='studio'?`${state.delegate} · ${Math.round(state.lastInfer)} ms`:`WEBGL · ${Math.round(reportCount*1000/(now-metricsAt))} FPS`):'';
+    metricsAt=now;reportCount=0;
   }
 }
 requestAnimationFrame(animate);
 
-function download(payload, filename) {
-  const url = URL.createObjectURL(payload);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
+function download(blob,name){
+  const url=URL.createObjectURL(blob), a=el('a');
+  a.href=url;a.download=name;document.body.append(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),3000);
 }
+$('capture').addEventListener('click',()=>{
+  const shot=document.createElement('canvas');
+  shot.width=bounds.w;shot.height=bounds.h;
+  const g=shot.getContext('2d');
+  const bg=g.createRadialGradient(bounds.w/2,bounds.h*.46,0,bounds.w/2,bounds.h*.46,bounds.w*.54);
+  bg.addColorStop(0,'#7d6c5c');bg.addColorStop(1,'#352921');
+  g.fillStyle=bg;g.fillRect(0,0,bounds.w,bounds.h);
+  const media=source();
+  if(media)drawMedia(g,media,sourceRect(media),state.source==='live'&&state.mirror);
+  if(gpu()&&studio.draw(state.split?state.splitAt/100:0)){
+    g.drawImage(canvas,0,0,bounds.w,bounds.h);g.drawImage(ctx.canvas,0,0,bounds.w,bounds.h);
+  } else if(state.source==='studio'&&$('poster').complete&&$('poster').naturalWidth){
+    const p=$('poster');drawMedia(g,p,contain(p.naturalWidth,p.naturalHeight,bounds.w,bounds.h),false);
+  }
+  const id=state.size.sku;
+  shot.toBlob((b)=>{if(b){download(b,`VFR-${id}.png`);toast('عکس آینه ذخیره شد.');}},'image/png');
+});
 
-function capture() {
-  const canvas = document.createElement('canvas');
-  const w = size.width, h = size.height;
-  const ratio = Math.max(1, Math.min(2, devicePixelRatio || 1));
-  canvas.width = w * ratio;
-  canvas.height = h * ratio;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(ratio, ratio);
-  const mode = state.mode;
-  ctx.fillStyle = '#171a14';
-  ctx.fillRect(0, 0, w, h);
-  if (mode === 'live') paintInput(ctx, video, rectFor(), state.mirror);
-  if (mode === 'photo') paintInput(ctx, imageCanvas, rectFor(), false);
-  if (mode === 'studio') {
-    if (gpu()) {
-      const grad = ctx.createRadialGradient(w * .53, h * .42, 0, w * .53, h * .5, w * .57);
-      grad.addColorStop(0, '#66624c');
-      grad.addColorStop(.54, '#3b3c30');
-      grad.addColorStop(1, '#1a1d16');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-    } else {
-      const img = $('poster');
-      if (img.complete && img.naturalWidth) paintInput(ctx, img, containRect(img.naturalWidth, img.naturalHeight, w, h), false);
+$$('button[data-source]').forEach(b=>b.addEventListener('click',()=>{
+  const next=b.dataset.source;
+  if(next==='photo'&&state.source===next){pickPhoto();return;}
+  if(next==='live'&&state.source===next){changeSource(stream||state.busy?'studio':'live');return;}
+  changeSource(next);
+}));
+$$('button[data-frame]').forEach(b=>b.addEventListener('click',()=>changeFrame(b.dataset.frame)));
+$('fullscreen').addEventListener('click',async()=>{
+  try{if(document.fullscreenElement)await document.exitFullscreen();else if(stage.requestFullscreen)await stage.requestFullscreen();else toast('این مرورگر تمام‌صفحهٔ آینه را پشتیبانی نمی‌کند.');}
+  catch{toast('تمام‌صفحه باز نشد.');}
+});
+$('turn').addEventListener('click',()=>{state.turn=state.turn>=.78?0:state.turn+.39;});
+$('motion').addEventListener('click',()=>{state.move=!state.move;controls();});
+$('wind').addEventListener('click',()=>{state.wind=!state.wind;controls();});
+$('compare').addEventListener('click',()=>{state.split=state.split?0:1;controls();});
+$('split-slider').addEventListener('input',e=>{state.splitAt=Number(e.currentTarget.value);controls();});
+$('quality').addEventListener('change',e=>{state.high=e.currentTarget.value==='high';resize();});
+$('zoom').addEventListener('input',e=>{state.zoom=Number(e.currentTarget.value)/100;});
+for(const id of ['mirror','occlusion','debug']){
+  $(id).addEventListener('change',(e)=>{state[id]=e.currentTarget.checked;if(id==='mirror')video.classList.toggle('is-mirror',state.mirror);});
+}
+$('form-select').replaceChildren(...forms.map(f=>new Option(f.label,f.id,false,state.formId===f.id)));
+$('form-select').addEventListener('change',e=>{state.formId=e.currentTarget.value;state.formPinned=true;updateLook(true);});
+$('apply-profile').addEventListener('change',e=>{state.apply=e.currentTarget.checked;updateLook(true);});
+
+const getFields=()=>$('measurement-form').elements;
+const scale=(k)=>['eye','bridge'].includes(k)?1:10;
+const bodyMethods={manual:'اندازه‌های ثبت‌شده با متر',scan:'اندازه‌های فایل اسکن واردشده',camera:'برآورد دو نمای دوربین'};
+function fillMeasurements(){
+  const fields=getFields(), body=state.body;
+  for(const key of Object.keys(metrics))fields.namedItem(key).value=body?.measures?.[key]?Number((body.measures[key].value/scale(key)).toFixed(1)):'';
+  $('fit-preference').value=state.preference;
+  $('measure-detail').textContent=bodyMethods[body?.method]??'اندازه‌ها برای پیشنهاد سایز و فرم مرجع مانکن استفاده می‌شوند.';
+}
+$('measurement-form').addEventListener('submit',(e)=>{
+  e.preventDefault();
+  const fields=getFields();
+  const values=Object.fromEntries(Object.keys(metrics).map(key=>[key,fields.namedItem(key).valueAsNumber*scale(key)]));
+  const profile=manualProfile(values);
+  const keep=state.body;
+  if(keep){
+    let retained=false;
+    for(const [key,m] of Object.entries(profile.measures)){
+      const old=keep.measures[key];
+      if(old && Math.abs(old.value-m.value)<.11){profile.measures[key]=old;retained=true;}
     }
+    if(retained)profile.method=keep.method;
   }
-  if (gpu() && studio.draw(state.compare ? state.split / 100 : 0)) {
-    ctx.drawImage($('render'), 0, 0, w, h);
-    ctx.drawImage(overlay.canvas, 0, 0, w, h);
-  }
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    download(blob, `VFR-${state.item.id}-${state.size}.png`);
-    toast('عکس آینه آماده شد.');
-  }, 'image/png');
-}
-
-$$('[data-mode]').filter((el) => el.tagName === 'BUTTON').forEach((button) => button.addEventListener('click', () => {
-  if (state.mode !== button.dataset.mode) chooseMode(button.dataset.mode);
-  else if (state.mode === 'live' && !stream && !state.busy) chooseMode('live');
-}));
-sourceAction.addEventListener('click', () => {
-  if (state.mode === 'photo') pickPhoto();
-  else chooseMode(state.mode === 'live' && (stream || state.busy) ? 'studio' : 'live');
+  state.body=Object.keys(profile.measures).length?profile:null;
+  state.preference=$('fit-preference').value;
+  put('profile',state.body);put('preference',state.preference);
+  fitBadge();if(state.apply)updateLook(true);
+  $('fit-dialog').close();toast('پروفایل اندازه ذخیره شد.');
 });
-for (const [id, key] of [['motion', 'move'], ['wind', 'wind'], ['compare', 'compare'], ['near', 'near']]) {
-  $(id).addEventListener('click', () => {
-    state[key] = !state[key];
-    if (key === 'move' || key === 'near') studio?.setMode(state.mode);
-    updateControls();
-  });
-}
-$('compare-range').addEventListener('input', (event) => {
-  state.split = Number(event.currentTarget.value);
-  updateControls();
+$('clear-measure').addEventListener('click',()=>{state.body=null;put('profile',null);fillMeasurements();fitBadge();if(state.apply)updateLook(true);toast('اندازه‌ها پاک شدند.');});
+$('import-body').addEventListener('click',()=>{$('body-file').value='';$('body-file').click();});
+$('body-file').addEventListener('change',async(e)=>{
+  const f=e.currentTarget.files[0];if(!f)return;
+  try{
+    if(f.size>40_000)throw new Error('حجم JSON بیش از حد است.');
+    state.body=readBodyScan(JSON.parse(await f.text()));put('profile',state.body);fillMeasurements();fitBadge();
+    if(state.apply)updateLook(true);
+    toast('اندازه‌های فایل اسکن ذخیره شدند.');
+  }catch(error){$('measure-hint').textContent=error instanceof SyntaxError?'JSON معتبر نیست.':error.message;}
 });
-$('capture').addEventListener('click', capture);
-$('full').addEventListener('click', async () => {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else if (stage.requestFullscreen) await stage.requestFullscreen();
-    else toast('تمام‌صفحه در این مرورگر پشتیبانی نمی‌شود.');
-  } catch { toast('نمای تمام‌صفحه در این مرورگر باز نشد.'); }
-});
-$('quality').addEventListener('change', (event) => {
-  state.quality = event.currentTarget.value;
-  refreshStage();
-});
-for (const key of ['mirror', 'occlusion', 'skeleton', 'gestures']) {
-  $(key).addEventListener('change', (event) => {
-    state[key] = event.currentTarget.checked;
-    if (key === 'mirror') video.classList.toggle('mirrored', state.mirror);
-  });
-}
-
-const fitForm = $('fit-form');
-const bodyKeys = ['height', 'chest', 'waist', 'hips'];
-const fitFields = () => Object.fromEntries(bodyKeys.flatMap((key) => {
-  const value = fitForm.elements[key].valueAsNumber;
-  return Number.isFinite(value) ? [[key, value]] : [];
-}));
-
-function renderFitTable() {
-  const el = $('fit-table');
-  const rows = sizes.map((size) => {
-    const fit = dimensions(state.item, size);
-    const values = [size, ...['chest', 'waist', 'hips', 'length'].map((key) => fit[key] ? number(fit[key]) : '–')];
-    return `<tr aria-current="${size === state.size}">${values.map((value) => `<td>${value}</td>`).join('')}</tr>`;
-  });
-  el.innerHTML = `<table aria-label="اندازه‌های لباس انتخابی بر حسب سانتی‌متر"><thead><tr><th>سایز</th><th>سینه</th><th>کمر</th><th>باسن</th><th>قد لباس</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
-}
-
-fitForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const values = fitFields();
-  state.body = Object.keys(values).length ? { ...values, source: 'manual' } : null;
-  save('measurements', state.body);
-  fitIndicator();
-  $('fit-dialog').close();
-  toast('اندازه‌ها ثبت شدند.');
-});
-$('clear-fit').addEventListener('click', () => {
-  state.body = null;
-  save('measurements', null);
-  fitForm.reset();
-  fitIndicator();
-  toast('اندازه‌های ذخیره‌شده پاک شدند.');
-});
-$('calibrate').addEventListener('click', () => {
-  const field = fitForm.elements.height;
-  if (!Number.isFinite(field.valueAsNumber) || !field.checkValidity()) {
-    field.focus();
-    $('fit-hint').textContent = 'برای کالیبراسیون، ابتدا قد را بین ۱۲۰ تا ۲۱۸ سانتی‌متر وارد کن.';
-    return;
-  }
-  if (!gpu()) {
-    $('fit-hint').textContent = 'برآورد دوربینی به WebGL2 نیاز دارد. اندازه‌ها را دستی هم می‌توان وارد کرد.';
-    return;
-  }
-  $('fit-dialog').close();
-  if (state.mode !== 'live' || (!state.busy && !stream)) chooseMode('live');
-  state.calibration = { sensor: new Calibration(field.valueAsNumber), started: 0 };
-  syncCameraOptions().catch((error) => cameraFailure(error, generation));
+$('scan-start').addEventListener('click',()=>{
+  const v=getFields().namedItem('height');
+  if(!v.value||!v.checkValidity()){$('measure-hint').textContent='قد را بین ۱۳۵ و ۲۱۸ سانتی‌متر وارد کن.';v.focus();return;}
+  if(!gpu()){$('measure-hint').textContent='برآورد دوربینی به شتاب‌دهی WebGL2 نیاز دارد.';return;}
+  const heightMm=Math.round(v.valueAsNumber*10);
+  $('fit-dialog').close();changeFrame('full');
+  if(state.source!=='live'||!stream&&!state.busy)changeSource('live');
+  state.scan={sensor:new TwoViewScan(heightMm),deadline:performance.now()+42000};
+  guide('برای نمای اول، تمام‌قد روبه‌رو بایست.');
 });
 
-const patternForm = $('pattern-form');
-const patternField = (name) => patternForm.elements.namedItem(name);
-for (const [key, data] of [['cut', cuts], ['fabric', fabrics]]) {
-  for (const [value, option] of Object.entries(data)) patternField(key).add(new Option(option.label, value));
-}
-function patternLabels() {
-  const isSkirt = cuts[patternField('cut').value].family === 'skirt';
-  $('pattern-chest').hidden = patternField('chest').disabled = isSkirt;
-}
-function loadPatternForm(data) {
-  for (const key of ['name', 'cut', 'fabric', 'color', 'chest', 'waist', 'hips', 'length']) {
-    patternField(key).value = data[key] ?? '';
+const chartLabels={...Object.fromEntries(Object.entries(metrics).map(([k,m])=>[k,m.label])),length:'قد لباس',width:'عرض فریم'};
+const dimValue=(k,v)=>v==null?'—':k==='eye'||k==='bridge'||k==='width'?show(v):cm(v);
+const displayStatus={missing:'اندازه وارد نشده',clear:'در بازه',tight:'کمتر از حد',loose:'بیشتر از حد',uncertain:'مرزی'};
+function chart(){
+  const {item,size}=state, keys=Object.keys(size.garment);
+  $('chart-context').textContent=`${item.title} · ${item.frame==='face'?'میلی‌متر':'سانتی‌متر'} · ابعاد خود کالا`;
+  const table=el('table'),thead=el('thead'),row=el('tr');
+  for(const v of ['سایز',...keys.map(k=>chartLabels[k])])row.append(el('th',v));
+  thead.append(row);table.append(thead);
+  const b=el('tbody');
+  for(const s of item.sizes){
+    const t=el('tr',null,s===size?'active':'');
+    for(const v of [s.label,...keys.map(k=>dimValue(k,s.garment[k]))])t.append(el('td',v));
+    b.append(t);
   }
-  patternLabels();
-  $('pattern-error').textContent = '';
+  table.append(b);$('chart').replaceChildren(table);
+  $('checks').replaceChildren(...measures().checks.map(c=>{
+    const row=el('div');
+    const message=c.status==='missing'?displayStatus[c.status]:`${displayStatus[c.status]} · اختلاف ${dimValue(c.key,c.raw)}`;
+    const d=el('b',message);d.dataset.verdict=c.status;row.append(el('span',chartLabels[c.key]),d);
+    return row;
+  }));
 }
 
-function readPatternForm() {
-  return readPattern({
-    schema: 1, name: patternField('name').value, cut: patternField('cut').value, fabric: patternField('fabric').value, color: patternField('color').value,
-    chest: patternField('chest').valueAsNumber, waist: patternField('waist').valueAsNumber, hips: patternField('hips').valueAsNumber, length: patternField('length').valueAsNumber,
-  });
+function register(record){
+  const id=record.item.id;
+  state.records.set(id,record);
+  if(urls.has(id)){URL.revokeObjectURL(urls.get(id));urls.delete(id);}
+  if(record.files['poster.webp'])urls.set(id,URL.createObjectURL(new Blob([record.files['poster.webp']],{type:'image/webp'})));
 }
-patternField('cut').addEventListener('change', () => {
-  const ref = catalog.find((item) => item.cut === patternField('cut').value);
-  patternField('length').value = cuts[ref.cut].length;
-  if (!patternField('chest').value) patternField('chest').value = ref.chest ?? 96;
-  patternLabels();
+async function importBytes(bytes){
+  const status=$('import-status');status.textContent='در حال اعتبارسنجی بسته و فایل‌های GLB…';
+  const p=unpackPackage(bytes);
+  try{await storePackage(p);}catch{toast('این مرورگر ذخیرهٔ محلی بسته را محدود کرده است.');}
+  register(p);state.filter='scan';showList(true);select(p.item);
+  $('import-dialog').close();
+  toast(`${p.item.title} با ${show(p.item.sizes.length)} سایز وارد شد.`);
+}
+$('import-zip').addEventListener('click',()=>{$('zip-file').value='';$('zip-file').click();});
+$('zip-file').addEventListener('change',async e=>{
+  const f=e.currentTarget.files[0];if(!f)return;
+  try{
+    if(f.size>42*1024*1024)throw new Error('حجم بسته باید کمتر از ۴۲ مگابایت باشد.');
+    await importBytes(new Uint8Array(await f.arrayBuffer()));
+  }catch(error){$('import-status').textContent=error instanceof SyntaxError?'manifest.json خوانده نشد.':error.message;}
 });
-patternForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  try {
-    state.custom = readPatternForm();
-    save('pattern', patternData(state.custom));
-    state.filter = 'custom';
-    drawList(true);
-    selectLook(state.custom);
-    $('pattern-dialog').close();
-    toast('قالب در کمد لباس آمادهٔ پرو است.');
-  } catch (error) { $('pattern-error').textContent = error.message; }
-});
-$('import-pattern').addEventListener('click', () => {
-  $('pattern-input').value = '';
-  $('pattern-input').click();
-});
-$('pattern-input').addEventListener('change', async (event) => {
-  const file = event.currentTarget.files[0];
-  if (!file) return;
-  try {
-    if (file.size > 32_768) throw new Error('فایل قالب باید کمتر از ۳۲ کیلوبایت باشد.');
-    const payload = JSON.parse(await file.text());
-    const item = readPattern(payload);
-    loadPatternForm(patternData(item));
-    $('pattern-error').textContent = 'قالب بار شد. برای نمایش، «پرو قالب» را انتخاب کن.';
-  } catch (error) {
-    $('pattern-error').textContent = error instanceof SyntaxError ? 'فایل JSON معتبر نیست.' : error.message;
-  }
-});
-$('export-pattern').addEventListener('click', () => {
-  if (!patternForm.reportValidity()) return;
-  try {
-    const payload = JSON.stringify(patternData(readPatternForm()), null, 2);
-    download(new Blob([payload], { type: 'application/json' }), 'vfr-garment.json');
-    $('pattern-error').textContent = '';
-  } catch (error) { $('pattern-error').textContent = error.message; }
+$('sample-zip').addEventListener('click',async()=>{
+  const button=$('sample-zip');button.disabled=true;
+  try{
+    const response=await fetch(asset('protocol/atelier-scanned.zip'));
+    if(!response.ok)throw new Error('بستهٔ نمونه در دسترس نیست.');
+    await importBytes(new Uint8Array(await response.arrayBuffer()));
+  }catch(error){$('import-status').textContent=error.message;}
+  finally{button.disabled=false;}
 });
 
-function openDialog(id) {
-  if (id === 'fit-dialog') {
-    bodyKeys.forEach((key) => { fitForm.elements[key].value = state.body?.[key] ?? ''; });
-    $('fit-hint').textContent = state.body?.source === 'camera'
-      ? 'این اندازه‌ها برآورد دوربین‌اند. برای انتخاب سایز واقعی می‌توانی مقدار مترخورده را جایگزین کنی.'
-      : 'برای برآورد دوربینی، قد را وارد کن و با دست‌های کمی باز روبه‌روی دوربین بایست. ضخامت بدن از یک تصویر تخمین زده می‌شود.';
-    renderFitTable();
-  }
-  if (id === 'pattern-dialog') loadPatternForm(patternData(state.custom ?? state.item));
+function cart(){
+  $('cart-count').hidden=!state.cart.length;
+  $('cart-count').textContent=show(state.cart.length);
+  $('export-cart').disabled=!state.cart.length;
+  const host=$('cart-lines');
+  host.replaceChildren(...(state.cart.length?state.cart.map((line)=>{
+    const row=el('div',null,'cart-line'), copy=el('div');
+    copy.append(el('strong',line.title),el('small',`${line.size} · ${line.color} · ${line.sku}`),
+      el('small',line.availability==='demo'?'نمونهٔ نمایشی':verdicts[line.fit]?.[0]??'تناسب بررسی نشده'));
+    row.append(copy);
+    if(line.url){
+      const a=el('a','رفتن به فروشگاه','quiet');a.href=line.url;a.target='_blank';a.rel='noopener noreferrer';row.append(a);
+    }
+    const remove=el('button','حذف','quiet');remove.type='button';
+    remove.addEventListener('click',()=>{state.cart=state.cart.filter(x=>x.id!==line.id);put('cart',state.cart);cart();});row.append(remove);
+    return row;
+  }):[el('p','هنوز محصولی در پیش‌نویس نیست.','hint')]));
+}
+$('add-cart').addEventListener('click',()=>{
+  const line=lineFor(state.item,state.size,state.color,measures());
+  state.cart=[line,...state.cart.filter(l=>l.id!==line.id)];
+  put('cart',state.cart);cart();open('cart-dialog');
+});
+$('export-cart').addEventListener('click',()=>download(new Blob([JSON.stringify(makeOrder(state.cart),null,2)],{type:'application/json'}),'VFR-order-draft.json'));
+function open(id){
+  if(id==='fit-dialog')fillMeasurements();
+  if(id==='size-dialog')chart();
+  if(id==='cart-dialog')cart();
+  if(id==='import-dialog')$('import-status').textContent='';
   $(id).showModal();
 }
-$$('[data-open]').forEach((button) => button.addEventListener('click', () => openDialog(button.dataset.open)));
-$$('[data-close]').forEach((button) => button.addEventListener('click', () => button.closest('dialog').close()));
-$$('dialog').forEach((dialog) => dialog.addEventListener('click', (event) => {
-  if (event.target !== dialog) return;
-  const rect = dialog.getBoundingClientRect();
-  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
-}));
-window.addEventListener('pagehide', () => {
-  if (state.mode === 'live') chooseMode('studio');
+$$('[data-open]').forEach(b=>b.addEventListener('click',()=>open(b.dataset.open)));
+$$('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
+for(const d of $$('dialog'))d.addEventListener('click',(e)=>{
+  if(e.target!==d)return;
+  const b=d.getBoundingClientRect();
+  if(e.clientX<b.left||e.clientX>b.right||e.clientY<b.top||e.clientY>b.bottom)d.close();
 });
+window.addEventListener('pagehide',()=>{if(state.source==='live')changeSource('studio');});
 
-drawList();
-selectLook(state.item);
-chooseMode('studio');
+showList();product();cart();changeSource('studio');updateLook(true);
+listPackages().then(records=>{records.forEach(register);showList();}).catch(()=>{});

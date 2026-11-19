@@ -1,110 +1,119 @@
+export const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+export const asset = (path) => new URL(path, new URL(import.meta.env?.BASE_URL ?? './', document.baseURI)).href;
+const fa = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 1 });
+export const show = (value) => fa.format(value);
+export const cm = (mm) => show(mm / 10);
+
 export const fabrics = {
-  satin: { label: 'ساتن', roughness: .31, sheen: .67, scale: 3, stiffness: .66, damping: .965, lift: 1.13, folds: 1 },
-  silk: { label: 'ابریشم', roughness: .35, sheen: .83, scale: 2, stiffness: .59, damping: .961, lift: 1.28, folds: 1.1 },
-  twill: { label: 'گاباردین', roughness: .54, sheen: .27, scale: 3, stiffness: .86, damping: .94, lift: .62, folds: .68 },
-  wool: { label: 'پشم', roughness: .72, sheen: .58, scale: 3, stiffness: .89, damping: .929, lift: .52, folds: .61 },
-  nylon: { label: 'نایلون', roughness: .43, sheen: .34, scale: 4, stiffness: .73, damping: .95, lift: .85, folds: .85 },
-  fleece: { label: 'دورس', roughness: .84, sheen: .39, scale: 4, stiffness: .78, damping: .921, lift: .6, folds: .73 },
+  gabardine: { name: 'گاباردین پنبه', roughness: .62, sheen: .26, softness: .37, thickness: .0024, thread: 'diagonal' },
+  satin: { name: 'ساتن ابریشم', roughness: .32, sheen: .57, softness: .84, thickness: .0012, thread: 'fine' },
+  wool: { name: 'پشم جناغی', roughness: .72, sheen: .39, softness: .34, thickness: .0033, thread: 'diagonal' },
+  suede: { name: 'جیر', roughness: .73, sheen: .17, softness: .38, thickness: .0030, thread: 'grain' },
+  silk: { name: 'ابریشم پلیسه', roughness: .43, sheen: .60, softness: .89, thickness: .0013, thread: 'fine' },
+  knit: { name: 'بافت ریب', roughness: .69, sheen: .48, softness: .64, thickness: .0030, thread: 'rib' },
+  optical: { name: 'استات و فلز', roughness: .29, sheen: 0, softness: 0, thickness: .003, thread: 'fine' },
 };
 
-export const cuts = {
-  luna: { label: 'پیراهن تک‌شانه', family: 'dress', length: 122, flare: .64, pleats: 7, sleeve: 0, neck: 'asymmetric' },
-  viola: { label: 'پیراهن بنددار', family: 'dress', length: 111, flare: .56, pleats: 6, sleeve: 0, neck: 'slip' },
-  siena: { label: 'دامن پلیسه', family: 'skirt', length: 77, flare: .74, pleats: 24, sleeve: 0, neck: 'none' },
-  noir: { label: 'کت کمربنددار', family: 'jacket', length: 73, flare: .47, pleats: 5, sleeve: .96, neck: 'lapel' },
-  ash: { label: 'بامبر', family: 'jacket', length: 62, flare: .43, pleats: 5, sleeve: .95, neck: 'bomber' },
-  cedar: { label: 'بارانی', family: 'coat', length: 113, flare: .57, pleats: 8, sleeve: .96, neck: 'lapel' },
-  cobalt: { label: 'هودی', family: 'jacket', length: 67, flare: .46, pleats: 5, sleeve: .98, neck: 'hood' },
-  iris: { label: 'کت یقه‌آزاد', family: 'jacket', length: 66, flare: .44, pleats: 5, sleeve: .69, neck: 'lapel' },
+export const metrics = {
+  chest: { label: 'دور سینه', range: [600, 1700] },
+  waist: { label: 'دور کمر', range: [470, 1660] },
+  hip: { label: 'دور باسن', range: [610, 1740] },
+  shoulder: { label: 'عرض شانه', range: [260, 620] },
+  sleeve: { label: 'طول دست', range: [400, 820] },
+  height: { label: 'قد', range: [1350, 2180] },
+  eye: { label: 'فاصلهٔ مردمک‌ها', range: [48, 81] },
+  bridge: { label: 'عرض پل بینی', range: [12, 28] },
 };
 
+const body = (height, chest, waist, hip, shoulder, sleeve) => ({ height, chest, waist, hip, shoulder, sleeve });
+export const forms = [
+  { id: 'f36', label: 'زنانه ۳۶ · قد ۱۶۸', shape: 'female', measure: body(1680, 860, 680, 930, 368, 550) },
+  { id: 'f44', label: 'زنانه ۴۴ · قد ۱۷۲', shape: 'female', measure: body(1720, 1010, 850, 1080, 408, 578) },
+  { id: 'f50', label: 'زنانه ۵۰ · قد ۱۶۶', shape: 'female', measure: body(1660, 1160, 1040, 1240, 442, 565) },
+  { id: 'm48', label: 'مردانه ۴۸ · قد ۱۸۰', shape: 'male', measure: body(1800, 970, 820, 980, 436, 624) },
+  { id: 'm56', label: 'مردانه ۵۶ · قد ۱۸۶', shape: 'male', measure: body(1860, 1135, 1000, 1130, 493, 655) },
+];
+export const form = (id) => forms.find((v) => v.id === id) ?? forms[0];
+export const fitModes = {
+  full: { label: 'تمام‌قد', title: 'تمام‌قد روبه‌روی دوربین بایست', description: 'شانه‌ها، لگن و مچ پا داخل قاب باشند.' },
+  upper: { label: 'از کمر به بالا', title: 'شانه‌ها و صورت را در قاب بگیر', description: 'برای کت، ژاکت و بالاتنه.' },
+  face: { label: 'فقط صورت', title: 'صورتت را به‌طور کامل در قاب بگیر', description: 'برای پرو فریم. سرت را آرام به چپ و راست بچرخان.' },
+};
+
+const ease = {
+  coat: { chest: [105, 244], waist: [87, 255], hip: [95, 240], shoulder: [-10, 38], sleeve: [-12, 50] },
+  jacket: { chest: [72, 169], waist: [66, 183], hip: [65, 185], shoulder: [-12, 28], sleeve: [-15, 38] },
+  dress: { chest: [30, 110], waist: [28, 117], hip: [38, 158] },
+  skirt: { waist: [14, 59], hip: [40, 185] },
+  knit: { chest: [-30, 123], waist: [-18, 155], shoulder: [-26, 27], sleeve: [-33, 43] },
+  glasses: { eye: [-6, 6], bridge: [-2, 2] },
+};
+
+function sizes(prefix, labels, base, grade) {
+  const middle = Math.floor(labels.length / 2);
+  return labels.map((label, index) => ({
+    label, sku: `${prefix}-${label.replace(/[^a-zA-Z0-9.-]+/g, '-')}`,
+    garment: Object.fromEntries(Object.entries(base).map(([key, value]) => [key, value + (index - middle) * (grade[key] ?? 0)])),
+    toleranceMm: base.eye ? .6 : 5,
+  }));
+}
+
+const women = ['32', '34', '36', '38', '40', '42', '44', '46', '48', '50', '52'];
+const men = ['42', '44', '46', '48', '50', '52', '54', '56', '58', '60', '62'];
+const profile = {
+  coat: { chest: 42, waist: 44, hip: 41, shoulder: 9, sleeve: 6, length: 8 },
+  dress: { chest: 42, waist: 43, hip: 42, shoulder: 9, length: 8 },
+  skirt: { waist: 39, hip: 42, length: 6 },
+};
+
+const look = (x) => ({ ...x, source: 'atelier', availability: 'demo', ease: ease[x.cut], colors: x.colors.map(([label, value]) => ({ label, value })) });
 export const catalog = [
-  { id: 'luna', name: 'پیراهن لونا', en: 'Luna', audience: 'women', cut: 'luna', fabric: 'satin',
-    colors: ['#882739', '#293952', '#774875'], names: ['زرشکی', 'سرمه‌ای', 'بادمجانی'], tile: '#362226',
-    chest: 94, waist: 77, hips: 104, description: 'برش تک‌شانه با دراپهٔ مورب و دامنی که با چرخش باز می‌شود.' },
-  { id: 'cedar', name: 'بارانی سِدِر', en: 'Cedar', audience: 'men', cut: 'cedar', fabric: 'twill',
-    colors: ['#b28357', '#444d37', '#333335'], names: ['کاراملی', 'زیتونی', 'ذغالی'], tile: '#383128',
-    chest: 110, waist: 101, hips: 112, description: 'بارانی کمربنددار با یقهٔ دوبل، سرآستین تسمه‌ای و پایین آزاد.' },
-  { id: 'siena', name: 'دامن سیِنا', en: 'Siena', audience: 'women', cut: 'siena', fabric: 'silk',
-    colors: ['#ded0b4', '#8f5144', '#426464'], names: ['شامپاینی', 'آجری', 'یشمی'], tile: '#38352e',
-    chest: null, waist: 74, hips: 105, description: 'پلیسه‌های ظریف از کمر تا لبه باز می‌شوند و با هر قدم موج می‌گیرند.' },
-  { id: 'ash', name: 'بامبر اِش', en: 'Ash', audience: 'men', cut: 'ash', fabric: 'nylon',
-    colors: ['#657052', '#344d66', '#783d44'], names: ['خاکی', 'آبی دودی', 'شرابی'], tile: '#28332a',
-    chest: 111, waist: 101, hips: 110, description: 'بامبر سبک با جیب آستین، زیپ فلزی و سرآستین کشباف.' },
-  { id: 'viola', name: 'پیراهن ویولا', en: 'Viola', audience: 'women', cut: 'viola', fabric: 'silk',
-    colors: ['#64428a', '#33534c', '#ad8587'], names: ['بنفش تیره', 'سبز جنگلی', 'رز چرک'], tile: '#362a3a',
-    chest: 91, waist: 76, hips: 99, description: 'پیراهن بنددار با یقهٔ نرم، خط کمر محو و حرکت روان ابریشم.' },
-  { id: 'noir', name: 'کت نُوآر', en: 'Noir', audience: 'men', cut: 'noir', fabric: 'wool',
-    colors: ['#29292e', '#685049', '#39444e'], names: ['مشکی', 'موکا', 'خاکستری آبی'], tile: '#302e34',
-    chest: 107, waist: 98, hips: 106, description: 'کت ساختارمند با یقهٔ برگردان، کمربند باریک و دوخت نمایان.' },
-  { id: 'iris', name: 'کت آیریس', en: 'Iris', audience: 'women', cut: 'iris', fabric: 'wool',
-    colors: ['#d1c5b5', '#888e9b', '#434d3a'], names: ['استخوانی', 'مه‌آلود', 'زیتونی'], tile: '#37332e',
-    chest: 100, waist: 86, hips: 103, description: 'کت پشمی روشن با آستین سه‌ربع، یقهٔ آزاد و جیب‌های برش‌دار.' },
-  { id: 'cobalt', name: 'هودی کبالت', en: 'Cobalt', audience: 'men', cut: 'cobalt', fabric: 'fleece',
-    colors: ['#3e5cbe', '#666776', '#8c5747'], names: ['آبی کبالت', 'خاکستری', 'مسی'], tile: '#272e41',
-    chest: 114, waist: 105, hips: 112, description: 'دورس ضخیم با کلاه دولایه، بند و جیب کانگورویی.' },
+  look({ id: 'terra', title: 'بارانی تِرا', english: 'TERRA', audience: 'women', cut: 'coat', form: 'f36', frame: 'full',
+    fabric: 'gabardine', colors: [['کاراملی','#937057'],['زغالی','#343938'],['زیتونی','#555848']],
+    description: 'بارانی دوردیفه با یقهٔ برگردان، کمربند چفت‌دار و دامن آزاد.',
+    sizes: sizes('TRA', women, { chest: 1138, waist: 989, hip: 1222, shoulder: 420, sleeve: 594, length: 1068 }, profile.coat) }),
+  look({ id: 'celeste', title: 'پیراهن سِلِست', english: 'CELESTE', audience: 'women', cut: 'dress', form: 'f36', frame: 'full',
+    fabric: 'satin', colors: [['شرابی','#753044'],['یشمی','#305950'],['بنفش دودی','#554660']],
+    description: 'ساتن مات با یقهٔ دراپه، بند باریک و دامن اریب.',
+    sizes: sizes('CLS', women, { chest: 1006, waist: 864, hip: 1125, shoulder: 392, length: 1150 }, profile.dress) }),
+  look({ id: 'meridian', title: 'کت مِریدین', english: 'MERIDIAN', audience: 'men', cut: 'jacket', form: 'm48', frame: 'upper',
+    fabric: 'wool', colors: [['گرافیت','#343b43'],['قهوه‌ای دودی','#57443d'],['آبی نفتی','#2b4a53']],
+    description: 'کت پشمی با سرشانهٔ ساختارمند، یقهٔ شکاف‌دار و سرآستین دکمه‌خور.',
+    sizes: sizes('MER', men, { chest: 1155, waist: 1018, hip: 1108, shoulder: 482, sleeve: 654, length: 741 }, profile.coat) }),
+  look({ id: 'orion', title: 'ژاکت اُریون', english: 'ORION', audience: 'men', cut: 'jacket', form: 'm48', frame: 'upper',
+    fabric: 'suede', colors: [['دارچینی','#845340'],['خاکی','#6a6b55'],['دودی','#4a4551']],
+    description: 'ژاکت جیر با یقهٔ ایستاده، زیپ فلزی و کمر کشباف.',
+    sizes: sizes('ORN', men, { chest: 1182, waist: 1035, hip: 1092, shoulder: 474, sleeve: 652, length: 662 }, profile.coat) }),
+  look({ id: 'solene', title: 'دامن سولِن', english: 'SOLÈNE', audience: 'women', cut: 'skirt', form: 'f44', frame: 'full',
+    fabric: 'silk', colors: [['صدفی','#bbad93'],['لاجوردی','#364b76'],['آجری','#834a3d']],
+    description: 'پلیسه‌های تیز با کمربند تخت و لبهٔ متحرک.',
+    sizes: sizes('SLN', women, { waist: 859, hip: 1120, length: 762 }, profile.skirt) }),
+  look({ id: 'rune', title: 'پلیور رون', english: 'RUNE', audience: 'men', cut: 'knit', form: 'm48', frame: 'upper',
+    fabric: 'knit', colors: [['استخوانی','#bcb29f'],['لاجوردی','#354b63'],['بورگاندی','#5a303b']],
+    description: 'بافت ریب با یقهٔ گرد، کشباف سرآستین و درز برجستهٔ شانه.',
+    sizes: sizes('RUN', men, { chest: 1080, waist: 996, hip: 1050, shoulder: 449, sleeve: 638, length: 645 }, profile.coat) }),
+  look({ id: 'linea', title: 'فریم لینئا', english: 'LINEA', audience: 'accessory', cut: 'glasses', form: 'f36', frame: 'face',
+    fabric: 'optical', colors: [['لاک‌پشتی','#6b4933'],['مشکی','#20252a'],['شیری','#b9a485']],
+    description: 'فریم کشیدهٔ استات با دستهٔ باریک و لولاهای فلزی.',
+    sizes: sizes('LIN', ['48/18', '50/19', '52/20'], { eye: 63, bridge: 19, width: 136 }, { eye: 3, bridge: 1, width: 4 }) }),
+  look({ id: 'arc', title: 'فریم آرک', english: 'ARC', audience: 'accessory', cut: 'glasses', form: 'm48', frame: 'face',
+    fabric: 'optical', colors: [['برنز','#a08663'],['گرافیت','#424850'],['زیتونی','#646753']],
+    description: 'فریم گرد با پل دوبل و عدسی شفاف.',
+    sizes: sizes('ARC', ['47/18', '49/19', '51/20'], { eye: 64, bridge: 19, width: 137 }, { eye: 3, bridge: 1, width: 4 }) }),
 ];
 
-export const sizes = ['XS', 'S', 'M', 'L', 'XL'];
-export const sizeSteps = { XS: -8, S: -4, M: 0, L: 4, XL: 8 };
-export const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-export const asset = (path) => new URL(path, new URL(import.meta.env?.BASE_URL ?? './', document.baseURI)).href;
-export const number = (value) => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value);
-
-export function dimensions(item, size = 'M') {
-  const step = sizeSteps[size] ?? 0;
-  return {
-    chest: item.chest == null ? null : item.chest + step,
-    waist: item.waist + step,
-    hips: item.hips + step,
-    length: (item.length ?? cuts[item.cut].length) + step * .35,
-  };
+export function compatible(item, mode) {
+  if (mode === 'face') return item.frame === 'face';
+  if (mode === 'upper') return item.frame === 'upper';
+  return item.frame !== 'face';
 }
 
-export function recommendSize(item, body) {
-  const targets = item.cut === 'siena' ? ['waist', 'hips'] : ['chest', 'waist', 'hips'];
-  if (!targets.every((key) => Number.isFinite(body[key]))) return null;
-  const loose = cuts[item.cut].family === 'jacket' || cuts[item.cut].family === 'coat';
-  const ease = loose ? { chest: 8, waist: 5, hips: 4 } : { chest: 3, waist: 2, hips: 3 };
-  return sizes.find((size) => {
-    const fit = dimensions(item, size);
-    return targets.every((key) => fit[key] - body[key] >= ease[key]);
-  }) ?? 'outside';
-}
-
-const numeric = (data, name, min, max) => {
-  if (typeof data[name] !== 'number' || !Number.isFinite(data[name]) || data[name] < min || data[name] > max) {
-    throw new Error(`مقدار «${name}» باید بین ${min} و ${max} باشد.`);
-  }
-  return data[name];
-};
-
-export function readPattern(data) {
-  if (!data || data.schema !== 1 || !Object.hasOwn(cuts, data.cut) || !Object.hasOwn(fabrics, data.fabric)) {
-    throw new Error('نسخه، برش یا جنس قالب پشتیبانی نمی‌شود.');
-  }
-  if (typeof data.name !== 'string' || !data.name.trim() || data.name.trim().length > 48) {
-    throw new Error('برای قالب یک نام حداکثر ۴۸ نویسه‌ای وارد کنید.');
-  }
-  if (typeof data.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(data.color)) {
-    throw new Error('رنگ را به شکل #aabbcc وارد کنید.');
-  }
-  const family = cuts[data.cut].family;
-  const lengthRange = { dress: [85, 155], coat: [84, 144], skirt: [38, 112], jacket: [49, 88] };
-  return {
-    id: 'custom', name: data.name.trim(), en: 'Custom', audience: 'custom',
-    cut: data.cut, fabric: data.fabric, colors: [data.color], names: ['سفارشی'], tile: '#33332d',
-    chest: family === 'skirt' ? null : numeric(data, 'chest', 65, 170),
-    waist: numeric(data, 'waist', 50, 160),
-    hips: numeric(data, 'hips', 65, 175),
-    length: numeric(data, 'length', ...lengthRange[family]),
-    description: 'قالب سفارشی · اندازه‌ها بر حسب سانتی‌متر',
-  };
-}
-
-export function patternData(item) {
-  return {
-    schema: 1, name: item.name, cut: item.cut, fabric: item.fabric, color: item.colors[0],
-    chest: item.chest, waist: item.waist, hips: item.hips, length: Math.round(dimensions(item).length),
-  };
+export function startingSize(item, reference = form(item.form).measure) {
+  const key = Object.keys(item.ease)[0];
+  const target = reference[key];
+  if (!Number.isFinite(target)) return item.sizes[0];
+  const [lo, hi] = item.ease[key];
+  const mid = (lo + hi) / 2;
+  return item.sizes.reduce((best, size) =>
+    Math.abs(size.garment[key] - target - mid) < Math.abs(best.garment[key] - target - mid) ? size : best, item.sizes[0]);
 }

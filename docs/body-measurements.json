@@ -1,0 +1,12 @@
+{
+  "protocol": "vfr.body/1",
+  "unit": "mm",
+  "measures": {
+    "height": { "value": 1800, "uncertainty": 5 },
+    "chest": { "value": 972, "uncertainty": 9 },
+    "waist": { "value": 852, "uncertainty": 9 },
+    "hip": { "value": 977, "uncertainty": 10 },
+    "shoulder": { "value": 435, "uncertainty": 8 },
+    "sleeve": { "value": 619, "uncertainty": 8 }
+  }
+}

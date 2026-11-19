@@ -1,26 +1,26 @@
 {
-  "name": "vfr-studio",
-  "version": "1.0.0",
-  "description": "Browser-local virtual fitting studio",
-  "directories": {
-    "doc": "docs"
-  },
+  "name": "vfr-fitting",
+  "version": "2.0.0",
+  "type": "module",
+  "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
     "test": "node --test tests/*.test.mjs",
-    "stage:models": "node --use-env-proxy tools/stage-models.mjs"
+    "stage:models": "node --use-env-proxy tools/stage-models.mjs",
+    "prepare:demo": "node tools/sample-package.mjs",
+    "predev": "npm run prepare:demo",
+    "prebuild": "npm run prepare:demo",
+    "pretest": "npm run prepare:demo"
   },
-  "type": "module",
   "dependencies": {
     "@mediapipe/tasks-vision": "0.10.32",
+    "fflate": "0.8.2",
     "three": "0.183.2"
   },
   "devDependencies": {
     "jpeg-js": "0.4.4",
     "playwright": "1.56.1",
     "vite": "7.3.1"
-  },
-  "private": true
+  }
 }

@@ -1,4 +1,9 @@
 const shapes = {
+  bag: '<path d="M4 8h16l1 13H3L4 8Z"/><path d="M8 9V6a4 4 0 0 1 8 0v3"/>',
+  body: '<circle cx="12" cy="4.6" r="2.5"/><path d="M5 10l7-2 7 2m-7-2v8m0 0-4 6m4-6 4 6"/>',
+  upper: '<circle cx="12" cy="6" r="3.4"/><path d="M4 20v-1a8 8 0 0 1 16 0v1H4Z"/>',
+  face: '<path d="M5 9V5h4m6 0h4v4m0 6v4h-4m-6 0H5v-4"/><path d="M9 10h.01M15 10h.01m-5 5a3 3 0 0 0 4 0"/>',
+  rotate: '<path d="M20 10a8 8 0 1 0 0 5m0-10v5h-5"/>',
   video: '<rect x="2" y="5" width="13" height="14" rx="2"/><path d="m15 10 6-4v12l-6-4"/>',
   camera: '<path d="M4 7h4l2-3h4l2 3h4a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="3"/>',
   cube: '<path d="m12 2 9 5v10l-9 5-9-5V7l9-5Z"/><path d="m3 7 9 5 9-5m-9 5v10"/>',

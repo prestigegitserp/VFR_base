@@ -1,0 +1,98 @@
+{
+  "protocol": "vfr.garment/2",
+  "axes": "Y_UP_Z_FORWARD_METERS",
+  "id": "meridian-package",
+  "title": "کت نمونهٔ GLB",
+  "brand": "ATELIER SAMPLE",
+  "description": "نمونهٔ صادرشده از آتلیه با دو مدل GLB مستقل و جدول اندازهٔ اختصاصی.",
+  "audience": "men",
+  "cut": "jacket",
+  "fabric": "wool",
+  "color": "#57443d",
+  "easeMm": {
+    "chest": [
+      72,
+      169
+    ],
+    "waist": [
+      66,
+      183
+    ],
+    "hip": [
+      65,
+      185
+    ],
+    "shoulder": [
+      -12,
+      28
+    ],
+    "sleeve": [
+      -15,
+      38
+    ]
+  },
+  "sizes": [
+    {
+      "label": "46 Tall",
+      "sku": "SCAN-MER-46",
+      "model": "sizes/MER-46.glb",
+      "measurementsMm": {
+        "chest": 1029,
+        "waist": 886,
+        "hip": 985,
+        "shoulder": 455,
+        "sleeve": 665,
+        "length": 758
+      },
+      "anchors": {
+        "leftShoulder": [
+          -0.218,
+          1.4349081137309292,
+          0
+        ],
+        "rightShoulder": [
+          0.218,
+          1.4349081137309292,
+          0
+        ],
+        "hip": [
+          0,
+          0.9112395977808598,
+          0
+        ]
+      },
+      "toleranceMm": 5
+    },
+    {
+      "label": "52 Regular",
+      "sku": "SCAN-MER-52",
+      "model": "sizes/MER-52.glb",
+      "measurementsMm": {
+        "chest": 1155,
+        "waist": 1018,
+        "hip": 1108,
+        "shoulder": 482,
+        "sleeve": 654,
+        "length": 741
+      },
+      "anchors": {
+        "leftShoulder": [
+          -0.218,
+          1.4349081137309292,
+          0
+        ],
+        "rightShoulder": [
+          0.218,
+          1.4349081137309292,
+          0
+        ],
+        "hip": [
+          0,
+          0.9112395977808598,
+          0
+        ]
+      },
+      "toleranceMm": 5
+    }
+  ]
+}
