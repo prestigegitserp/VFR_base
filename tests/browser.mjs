@@ -256,7 +256,9 @@ try{
   page=await desktop(instance);
   await page.goto(url);
   await page.locator('#stage[data-renderer=webgl]').waitFor();
+  await page.locator('button[data-frame=upper]').click();
   await page.locator('.look[data-look=orion]').click();
+  assert.equal(await page.locator('#stage').getAttribute('data-frame'),'upper');
   await page.locator('button[data-source=live]').click();
   try{
     await page.locator('#stage[data-depth=body][data-matte=active]').waitFor({timeout:85000});

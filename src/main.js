@@ -594,8 +594,11 @@ function animate(now){
   if(live&&state.ready&&!inspection){
     const label=status==='hold'?'بازیابی ردیابی':status==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب';
     signal(label,status==='locked'?'ready':'pending');
-    if(!scanPrompt(now))guide(status==='hold'?'چند لحظه صورت و شانه‌ها را در قاب نگه دار.':!rig?fitModes[state.mode].title:
-      state.mode==='full'&&!rig.full?'برای حرکت دامن، پاها هم در قاب باشند.':null);
+    if(!scanPrompt(now)){
+      if(!rig&&state.mode==='full'&&state.tracked?.pose)guide('برای نمای نزدیک، قاب بالاتنه را انتخاب کن.',()=>changeFrame('upper'),'قاب بالاتنه');
+      else guide(status==='hold'?'چند لحظه صورت و شانه‌ها را در قاب نگه دار.':!rig?fitModes[state.mode].title:
+        state.mode==='full'&&!rig.full?'برای حرکت دامن، پاها هم در قاب باشند.':null);
+    }
   }
   if(now-metricsAt>=1000){
     fps=metricsAt?Math.round(reportCount*1000/(now-metricsAt)):0;

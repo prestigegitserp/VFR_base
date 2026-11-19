@@ -4,7 +4,7 @@ const modelNames = { pose: 'pose.task', face: 'face.task', mask: 'mask.tflite' }
 const classFor = { pose: PoseLandmarker, face: FaceLandmarker, mask: ImageSegmenter };
 const options = {
   pose: { numPoses: 1, minPoseDetectionConfidence: .48, minPosePresenceConfidence: .45, minTrackingConfidence: .54 },
-  face: { numFaces: 1, outputFacialTransformationMatrixes: true, minFaceDetectionConfidence: .54, minFacePresenceConfidence: .52, minTrackingConfidence: .55 },
+  face: { numFaces: 1, minFaceDetectionConfidence: .54, minFacePresenceConfidence: .52, minTrackingConfidence: .55 },
   mask: { outputConfidenceMasks: false, outputCategoryMask: true },
 };
 const canvas = () => typeof document === 'undefined' ? new OffscreenCanvas(1,1) : document.createElement('canvas');
@@ -61,7 +61,7 @@ export class VisionCore {
     const primaryMethod=mode==='upper'?'IMAGE':method;
     const primary=await this.task(key,primaryMethod);
     const run=(k)=>(method==='VIDEO'?k.detectForVideo(image,time):k.detect(image));
-    let pose=null, world=null, face=null, matrix=null, mask=null, underlyingError=null;
+    let pose=null, world=null, face=null, mask=null, underlyingError=null;
     if(key==='pose'){
       const output=primaryMethod==='IMAGE'?primary.task.detect(image):run(primary.task);
       pose=output.landmarks[0]??null;
@@ -70,7 +70,6 @@ export class VisionCore {
     }else{
       const output=run(primary.task);
       face=output.faceLandmarks[0]??null;
-      matrix=output.facialTransformationMatrixes?.[0]?.data??null;
     }
     const upperShoulders=pose?.slice(11,13);
     const missingShoulders = !upperShoulders?.length || upperShoulders.some(p => (p.visibility??0)<.52 || p.y>.99 || p.x<0 || p.x>1);
@@ -80,7 +79,6 @@ export class VisionCore {
         const detector=await this.task('face',method);
         const output=run(detector.task);
         face=output.faceLandmarks[0]??null;
-        matrix=output.facialTransformationMatrixes?.[0]?.data??null;
       }catch(e){underlyingError=e.message;}
     }
     const poseMs=performance.now()-now;
@@ -95,7 +93,7 @@ export class VisionCore {
       }catch(e){underlyingError=e.message;}
       maskMs=performance.now()-started;
     }
-    return {pose,world,face,matrix,mask,headAttempted,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
+    return {pose,world,face,mask,headAttempted,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
   }
   close() {
     for(const p of this.model.values())p.then(({task})=>task.close()).catch(()=>{});
