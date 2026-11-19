@@ -160,6 +160,7 @@ export function makeWear(item, size, color, torso=.45) {
       return [x*mix(.104,.063,t),.027-t*.199-.011*x*x,
         centerZ+.091+.035*Math.sin(t*Math.PI/2)-.027*x*x];
     },false),m.dark,'Knit underlayer');
+    underlayer.userData.studioOnly=true;
     for(const s of [-1,1]) {
       const scale=shoulder/.214;
       const neck = [[.075,.019,.070],[.128,-.046,.109],[.086,-.116,.133],[.102,-.099,.140],
@@ -261,7 +262,6 @@ export function makeWear(item, size, color, torso=.45) {
     const newFit=lastFit!==fit;
     shapeTorso(fit);
     lastFit=fit;
-    if(underlayer)underlayer.visible=!fit;
     if(articulate) {
       armParts.forEach(({side,shell,cuff},i)=>{
         shapeArm(shell,arms[i],1,0,30,side,false,Boolean(fit));
@@ -283,7 +283,9 @@ export function makeWear(item, size, color, torso=.45) {
     }
   }
   return { group, update, fit:{ shoulder:shoulder*2, neck:.037, torso,
-    chest:c[0]*2, waist:w[0]*2, hip:h[0]*2 }, reset(){sim?.reset();}, dispose:()=>dispose(group,new Set(Object.values(m))) };
+    chest:c[0]*2, waist:w[0]*2, hip:h[0]*2 },
+    setPresentation(studio){if(underlayer)underlayer.visible=studio;},
+    reset(){sim?.reset();}, dispose:()=>dispose(group,new Set(Object.values(m))) };
 }
 
 function glasses(item,size,color) {

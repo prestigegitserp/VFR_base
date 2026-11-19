@@ -35,7 +35,11 @@ async function importWear(item,size,bytes) {
   model.scene.position.sub(center.applyQuaternion(rig));
   container.add(model.scene);
   container.name=item.english;
-  model.scene.traverse((o)=>{if(o.isMesh){o.castShadow=o.receiveShadow=true;}});
+  const studioParts=[];
+  model.scene.traverse(o=>{
+    if(o.isMesh)o.castShadow=o.receiveShadow=true;
+    if(o.userData.studioOnly===true)studioParts.push(o);
+  });
   const box=new T.Box3().setFromObject(container);
   const extent=box.getSize(V());
   if(!extent.toArray().every(Number.isFinite)||extent.x<.12||extent.x>2.25||extent.y<.12||extent.y>2.25||
@@ -43,7 +47,8 @@ async function importWear(item,size,bytes) {
     box.max.y>.28 || box.min.y>-.15) {
     dispose(container);throw new Error('ابعاد مدل نسبت به نقاط مرجع در مقیاس متر سازگار نیست.');
   }
-  return {group:container,anchors:{span,torso:torso.dot(vertical)},update(){},reset(){},dispose(){
+  return {group:container,anchors:{span,torso:torso.dot(vertical)},update(){},reset(){},
+    setPresentation(studio){for(const piece of studioParts)piece.visible=studio;},dispose(){
     const textures=new Set();
     container.traverse((o)=>{for(const m of (Array.isArray(o.material)?o.material:[o.material]).filter(Boolean))for(const value of Object.values(m))if(value?.isTexture)textures.add(value);});
     dispose(container);textures.forEach((t)=>t.dispose());
@@ -167,6 +172,7 @@ export class Atelier {
     if(!wear||!avatar){this.fresh=true;return;}
     const parent=demo?this.dressed:this.alignment;
     if(wear.group.parent!==parent)parent.add(wear.group);
+    wear.setPresentation?.(demo);
     wear.group.visible=(mode==='face')===(this.attachment==='face');
     if(demo) {
       const root=this.dressed;

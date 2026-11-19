@@ -107,6 +107,8 @@ try{
     });
   }
   await page.locator('button[data-frame=full]').click();
+  await page.locator('button[data-filter=all]').click();
+  await page.locator('.look[data-look=terra]').click();
   await page.locator('button[data-source=photo]').click();
   await page.locator('#photo-file').setInputFiles(photo);
   await expectSignal('پرو روی عکس');
@@ -115,6 +117,7 @@ try{
   assert.ok((await overlay()).count>160);
   console.log('OK: full-body pose and multiclass foreground mask');
   await page.locator('button[data-frame=upper]').click();
+  await page.locator('.look[data-look=meridian]').click();
   await page.locator('#photo-file').setInputFiles(upper);
   await expectSignal('پرو روی عکس');
   await page.locator('#stage[data-matte=active]').waitFor();
@@ -123,16 +126,20 @@ try{
   if(process.env.VFR_BROWSER_SHOTS)await page.screenshot({path:'.render/pro-upper.jpg',type:'jpeg',quality:86});
   await page.locator('#adjust-fit').click();
   await page.locator('#coverage').selectOption('off');
+  const beforeAdjustment=await overlay();
   await page.locator('#align-x').focus();
   await page.locator('#align-x').press('End');
   await page.locator('#alignment-dialog [data-close]').first().click();
   const adjusted=await overlay();
-  assert.ok(adjusted.center>initial.center+8,JSON.stringify({initial,adjusted}));
+  assert.ok(adjusted.center>beforeAdjustment.center+8,JSON.stringify({beforeAdjustment,adjusted}));
   await page.locator('#adjust-fit').click();
   await page.locator('#align-reset').click();
   assert.equal(await page.locator('#align-x').inputValue(),'0');
   assert.equal(await page.locator('#coverage').inputValue(),'balanced');
   await page.locator('#alignment-dialog [data-close]').first().click();
+  await page.locator('.look[data-look=orion]').click();
+  assert.ok((await overlay()).count>220);
+  if(process.env.VFR_BROWSER_SHOTS)await page.screenshot({path:'.render/pro-orion.jpg',type:'jpeg',quality:86});
   await page.locator('#inspect').click();
   await page.locator('#inspector').waitFor();
   const capturedReport=page.waitForEvent('download');

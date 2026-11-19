@@ -29,6 +29,7 @@ test('scanner package consists of two actual independent GLB sizes and standard 
   assert.deepEqual(item.sizes.map(s=>s.label),['46 Tall','52 Regular']);
   assert.notEqual(item.sizes[0].model,item.sizes[1].model);
   for(const size of item.sizes)assert.ok(readGlb(files[size.model]).meshes.length>2);
+  assert.ok(readGlb(files[item.sizes[0].model]).nodes.some(node=>node.extras?.studioOnly===true));
   assert.throws(()=>readGlb(new Uint8Array(64)));
   assert.throws(()=>unpackPackage(bytes.slice(0,40)));
 });
@@ -125,6 +126,7 @@ test('seated and tilted upper-body captures keep real shoulder and sleeve anchor
   const [shift]=drapePoint(0,y,0,fit);
   assert.ok(shift>.004);
   wear.update(rig.arms.map(chain=>chain.map(toLocal)),[],1/30,{},fit);
+  wear.setPresentation(false);
   const collar=wear.group.children.find(child=>child.name==='Knit underlayer');
   assert.equal(collar.visible,false);
   const cuffs=wear.group.children.filter(child=>child.name==='Sleeve cuff');
