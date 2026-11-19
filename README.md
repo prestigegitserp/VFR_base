@@ -27,7 +27,7 @@ npm run build
 
 ### GitHub Pages
 
-گردش‌کار [اعتبارسنجی](.github/workflows/pages.yml) برنامهٔ شاخهٔ `v1` را می‌سازد و آزمایش می‌کند. آزمون مرورگر با عکس و جریان ویدئوی نمونه، مسیر MediaPipe، WebGL2، انتخاب قالب و قطع دوربین را بررسی می‌کند. گردش‌کار [انتشار در main](https://github.com/prestigegitserp/VFR_base/blob/main/.github/workflows/pages.yml) نسخهٔ تأییدشدهٔ `v1` را روی Pages مستقر می‌کند. منبع Pages از نوع **GitHub Actions** است.
+گردش‌کار [اعتبارسنجی](.github/workflows/validate.yml) برنامهٔ شاخهٔ `v1` را می‌سازد و آزمایش می‌کند. آزمون مرورگر با عکس و جریان ویدئوی نمونه، مسیر MediaPipe، WebGL2، انتخاب قالب و قطع دوربین را بررسی می‌کند. گردش‌کار [انتشار در main](https://github.com/prestigegitserp/VFR_base/blob/main/.github/workflows/pages.yml) نسخهٔ تأییدشدهٔ `v1` را روی Pages مستقر می‌کند. منبع Pages از نوع **GitHub Actions** است.
 
 ### بازتولید رندرها
 
