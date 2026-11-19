@@ -41,6 +41,8 @@ jobs:
         if: always()
         with:
           name: vfr-v3-visual-check
-          path: .render/pro-*.jpg
+          path: |
+            .render/pro-upper.jpg
+            .render/pro-orion.jpg
           retention-days: 3
           if-no-files-found: ignore

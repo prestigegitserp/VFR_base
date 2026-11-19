@@ -27,6 +27,6 @@ function frame(phase){
   return Buffer.concat([Buffer.from('FRAME\n'), luma, cb, cr]);
 }
 
-const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F20:1 Ip A1:1 C420jpeg\n`);
-const frames=Array.from({length:36},(_,i)=>frame(i/36*Math.PI*2));
+const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F16:1 Ip A1:1 C420jpeg\n`);
+const frames=Array.from({length:43},(_,i)=>frame(i/43*Math.PI*2));
 await writeFile(target, Buffer.concat([header, ...frames]));

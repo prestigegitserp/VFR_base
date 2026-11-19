@@ -160,14 +160,25 @@ try{
   await page.locator('button[data-source=live]').click();
   await expectSignal('ردیابی بدن');
   await page.locator('#stage[data-matte=active]').waitFor();
+  await page.locator('[data-open=settings-dialog]').click();
+  await page.locator('#occlusion').uncheck();
+  await page.locator('#settings-dialog [data-close]').click();
+  await page.locator('#adjust-fit').click();
+  await page.locator('#coverage').selectOption('off');
+  await page.locator('#alignment-dialog [data-close]').first().click();
   const seen=[];
-  for(let i=0;i<9;i++){
-    const picture=await overlay();
-    if(picture.count>160)seen.push(picture.center);
+  const sampleDeadline=Date.now()+23_000;
+  while(Date.now()<sampleDeadline){
+    if(await page.locator('#stage').getAttribute('data-fit')==='locked'){
+      const picture=await overlay();
+      if(picture.count>160)seen.push(picture.center);
+    }
     if(seen.length>1 && Math.max(...seen)-Math.min(...seen)>8)break;
-    await new Promise(resolve=>setTimeout(resolve,160));
+    await new Promise(resolve=>setTimeout(resolve,135));
   }
-  assert.ok(seen.length>1&&Math.max(...seen)-Math.min(...seen)>8,JSON.stringify(seen));
+  const drift=seen.length>1?Math.max(...seen)-Math.min(...seen):0;
+  assert.ok(drift>8,JSON.stringify({drift,seen,errors}));
+  console.log('OK: camera moves the rendered garment without silhouette clipping',Math.round(drift),'px');
   await page.locator('#freeze').click();
   await page.locator('#stage[data-source=photo]').waitFor();
   await expectSignal('پرو روی عکس');

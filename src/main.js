@@ -436,7 +436,7 @@ function project(now=performance.now()) {
 
 function fittedFrame(now){
   const age=now-(state.tracked?.at??0);
-  const maxAge=clamp(state.lastInfer*2.35+72,255,530);
+  const maxAge=clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
   const live=state.source==='live';
   const found=live&&age>maxAge?null:project(now);
   if(found){
@@ -543,8 +543,9 @@ function animate(now){
   }
   if(live&&state.ready)sense(now);
   const result=fittedFrame(now), {rig,mask,alpha,status}=result;
-  stage.dataset.fit=status;
-  stage.dataset.matte=mask?'active':'off';
+  if(stage.dataset.fit!==status)stage.dataset.fit=status;
+  const matte=mask?'active':'off';
+  if(stage.dataset.matte!==matte)stage.dataset.matte=matte;
   if(live&&state.ready){
     const label=status==='hold'?'بازیابی ردیابی':status==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب';
     signal(label,status==='locked'?'ready':'pending');
