@@ -1,5 +1,7 @@
 name: Deploy VFR Studio to GitHub Pages
 
+# Publish the validated application tree from the environment's default branch.
+
 on:
   push:
     branches: [main]
