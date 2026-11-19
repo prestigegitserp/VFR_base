@@ -214,3 +214,5 @@ input[type=checkbox],input[type=range]{accent-color:#865036}
 .orbit-tools{display:flex;align-items:center;gap:12px;padding:8px 15px 12px;color:#f0dbc8;font-size:.86rem}
 .orbit-tools input{width:min(240px,60%);accent-color:#e2a875}
 #lens-value{min-width:32px;color:#7e4d31}
+
+.stage #camera-frame{object-fit:contain}

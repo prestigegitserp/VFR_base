@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import jpeg from 'jpeg-js';
 
-const [source, target] = process.argv.slice(2);
+const [source, target, option] = process.argv.slice(2);
 const image = jpeg.decode(await readFile(source), { useTArray: true });
 const scale = Math.min(1, 960 / image.width);
 const width = Math.floor(image.width * scale / 2) * 2;
@@ -11,11 +11,13 @@ function frame(phase){
   const cb = new Uint8Array(width * height / 4);
   const cr = new Uint8Array(width * height / 4);
   const shift=Math.round(width*.069*Math.sin(phase));
+  const marker=Math.round(width*.23)+shift;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const sourceX=Math.max(0,Math.min(width-1,x-shift));
       const i = (Math.floor(y * image.height / height) * image.width + Math.floor(sourceX * image.width / width)) * 4;
-      const r=image.data[i],g=image.data[i+1],b=image.data[i+2];
+      const mark=option==='--alignment-mark'&&y>=8&&y<24&&Math.abs(x-marker)<6;
+      const r=mark?5:image.data[i],g=mark?245:image.data[i+1],b=mark?13:image.data[i+2];
       luma[y * width + x] = Math.round(16 + .257 * r + .504 * g + .098 * b);
       if (x % 2 === 0 && y % 2 === 0) {
         const at = (y * width / 2 + x) / 2;

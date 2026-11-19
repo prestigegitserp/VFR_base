@@ -46,6 +46,7 @@
           <div class="studio-light"></div>
           <img class="media poster" id="poster" src="./looks/atelier.webp" alt="مانکن آتلیه با بارانی ترا">
           <video class="media" id="video" autoplay playsinline muted hidden></video>
+          <canvas class="media" id="camera-frame" aria-hidden="true" hidden></canvas>
           <img class="media" id="photo" alt="" hidden>
           <canvas id="render" aria-hidden="true"></canvas>
           <canvas id="foreground" aria-hidden="true"></canvas>
@@ -183,6 +184,7 @@
       <label>از اندازه‌های من برای مانکن استفاده کن <input id="apply-profile" type="checkbox"></label>
       <label>کیفیت رندر <select id="quality"><option value="balanced">متعادل</option><option value="high">جزئیات بالا</option></select></label>
       <label>پاسخ ردیابی <select id="response"><option value="steady">ملایم و پایدار</option><option value="fast">سریع‌تر</option></select></label>
+      <label>نمای زنده <select id="camera-sync"><option value="matched">هماهنگ با فیت</option><option value="direct">ویدئوی پیوسته</option></select></label>
       <label>دوربین <select id="camera-facing"><option value="user">جلو</option><option value="environment">پشت، در صورت وجود</option></select></label>
       <label for="lens-angle">زاویهٔ افقی لنز <input id="lens-angle" type="range" min="45" max="95" value="63" dir="ltr"><output id="lens-value" for="lens-angle" dir="ltr">۶۳°</output></label>
       <label>نمای آینه‌ای دوربین <input id="mirror" type="checkbox" checked></label>

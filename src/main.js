@@ -21,6 +21,8 @@ const el=(tag,content,cls)=>{
   return n;
 };
 const stage=$('stage'), video=$('video'), img=$('photo'), canvas=$('render'), ctx=$('foreground').getContext('2d');
+const cameraFrame=$('camera-frame'), sampleFrame=document.createElement('canvas');
+const cameraPixels=cameraFrame.getContext('2d',{alpha:false}), samplePixels=sampleFrame.getContext('2d',{alpha:false});
 const storage='vfr-atelier:v4:';
 try{
   if(!localStorage.getItem(storage+'initialized')){
@@ -45,11 +47,12 @@ const state={
   coverage:'balanced',response:'steady',camera:'user',alignment:{full:emptyAlignment(),upper:emptyAlignment(),face:emptyAlignment()},
   busy:false,ready:false,tracked:null,mask:null,headFrame:null,faceProbe:0,delegate:'',lastInfer:0,poseMs:0,maskMs:0,
   light:.50,scan:null,issue:'',lens:63,inspection:null,orbit:0,
+  sync:'matched',capturedAt:0,paintedAt:0,
 };
 const vision=new Vision(), smoothPose=new Temporal(), smoothWorld=new Temporal(), smoothFace=new Temporal([33,263]);
 const compositor=new FrameCompositor();
 const urls=new Map();
-let studio, stream, photoURL, frame=0, operation=0, display=0, pending=false, resultTime=0, lastFrame=-1;
+let studio, stream, photoURL, frame=0, operation=0, display=0, pending=false, resultTime=0, lastFrame=-1, syncChange=0;
 let commands=Promise.resolve(), metricsAt=0, reportCount=0, prev=0, noticeTimer, messageAction, guidanceAction;
 let bounds={w:1,h:1}, renderKey=null, projection=null, headProjection=null, rigRevision=0, stable=null,
   lastPaint=0, statsAt=0, renderMs=0, fps=0;
@@ -58,7 +61,7 @@ const gpu=()=>!!studio&&!studio.lost;
 const semantic=()=>state.occlusion||state.mode==='upper'||state.mode!=='face'&&state.coverage!=='off'||Boolean(state.scan);
 const source=()=>state.source==='live'&&video.readyState>=2?video:state.source==='photo'&&img.complete&&img.naturalWidth?img:null;
 const mirrored=()=>state.source==='live'&&state.mirror;
-const mediaSize=(m)=>[m?.videoWidth??m?.naturalWidth,m?.videoHeight??m?.naturalHeight];
+const mediaSize=(m)=>[m?.videoWidth??m?.naturalWidth??m?.width,m?.videoHeight??m?.naturalHeight??m?.height];
 const sourceRect=(media)=>{
   const [w,h]=mediaSize(media);
   return w&&h?contain(w,h,bounds.w,bounds.h):null;
@@ -244,6 +247,8 @@ function resetVision() {
   state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.delegate='';state.issue='';
   projection=null;headProjection=null;stable=null;state.headFrame=null;state.faceProbe=0;
   state.inspection=null;state.orbit=0;
+  state.capturedAt=state.paintedAt=0;
+  stage.dataset.sync='direct';cameraFrame.hidden=true;
   ctx.save();ctx.resetTransform();ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.restore();
   renderKey=null;
   stage.dataset.fit='none';
@@ -315,7 +320,7 @@ async function startCamera(id) {
     if(id!==operation){videoStream.getTracks().forEach(t=>t.stop());return;}
     stream=videoStream;
     video.srcObject=stream;video.hidden=false;
-    video.classList.toggle('is-mirror',mirrored());
+    for(const view of [video,cameraFrame])view.classList.toggle('is-mirror',mirrored());
     await video.play();
     videoStream.getVideoTracks()[0]?.addEventListener('ended',()=>{if(stream===videoStream)fail(new Error('جریان دوربین قطع شد.'),operation);},{once:true});
     if(id===operation)await setupCamera(id);
@@ -405,7 +410,7 @@ async function analyzePhoto(id){
   }catch(e){fail(e,id);}
 }
 
-function applyTracking(result,at){
+function applyTracking(result,at,matched=false){
   state.delegate=result.delegate;state.lastInfer=result.timeMs;
   state.poseMs=result.poseMs;state.maskMs=result.maskMs || state.maskMs;
   state.issue=result.underlyingError?'mask-unavailable':'';
@@ -415,11 +420,29 @@ function applyTracking(result,at){
   const live=state.source==='live';
   const track=(filter,points)=>live&&points?filter.update(points,at,state.response):points;
   if(result.headAttempted)state.faceProbe=at;
-  if(face)state.headFrame={face:track(smoothFace,face),at,nose:pose?.[0]};
+  function keepCurrentAnchor(filtered,raw,anchor){
+    if(!matched||!raw||!filtered||!raw[anchor]||!filtered[anchor])return filtered;
+    const a=raw[anchor],b=filtered[anchor];
+    return filtered.map(p=>({...p,x:p.x+a.x-b.x,y:p.y+a.y-b.y}));
+  }
+  if(face){
+    const filtered=track(smoothFace,face);
+    state.headFrame={face:keepCurrentAnchor(filtered,face,168),at,nose:pose?.[0]};
+  }
   const previous=state.headFrame;
   const moved=previous?.nose&&pose?.[0]?Math.hypot(previous.nose.x-pose[0].x,previous.nose.y-pose[0].y):0;
-  const head=previous&&at-previous.at<350&&moved<.032?previous.face:null;
-  state.tracked={pose:track(smoothPose,pose),world:track(smoothWorld,world),face:head,at};
+  let head=previous&&at-previous.at<350&&moved<.032&&(state.mode!=='face'||face)?previous.face:null;
+  if(head&&matched&&!face&&previous.nose&&pose?.[0]){
+    const dx=pose[0].x-previous.nose.x,dy=pose[0].y-previous.nose.y;
+    head=head.map(p=>({...p,x:p.x+dx,y:p.y+dy}));
+  }
+  let body=track(smoothPose,pose);
+  if(matched&&pose&&body&&pose[11]?.visibility>.49&&pose[12]?.visibility>.49){
+    const dx=(pose[11].x+pose[12].x-body[11].x-body[12].x)*.5;
+    const dy=(pose[11].y+pose[12].y-body[11].y-body[12].y)*.5;
+    body=body.map(p=>({...p,x:p.x+dx,y:p.y+dy}));
+  }
+  state.tracked={pose:body,world:track(smoothWorld,world),face:head,at};
   if(mask){
     stage.dataset.mask='ready';
     state.mask={frame:subjectMask(mask,pose,face),at,anchor:trackingCenter(pose,face)};
@@ -489,13 +512,39 @@ function sense(now){
   const target=state.response==='fast'?42:59;
   if(!state.ready||pending||video.readyState<2||video.currentTime===lastFrame||now-resultTime<Math.max(target,state.poseMs*.93))return;
   pending=true;lastFrame=video.currentTime;resultTime=now;
-  const id=operation, mode=state.mode;
+  const id=operation, mode=state.mode, syncId=syncChange;
   const masks=semantic()&&(state.scan||!state.mask||now-state.mask.at>clamp(state.maskMs*1.31+69,105,315));
   const headHint=mode==='upper'&&now-state.faceProbe>clamp(state.poseMs*.96+102,136,320);
-  enqueue(()=>vision.infer(video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper',headHint}))
-    .then(result=>{if(id===operation)applyTracking(result,performance.now());})
+  const matched=state.sync==='matched';
+  if(matched){
+    const scale=Math.min(1,1280/Math.max(video.videoWidth,video.videoHeight));
+    const width=Math.round(video.videoWidth*scale),height=Math.round(video.videoHeight*scale);
+    if(sampleFrame.width!==width||sampleFrame.height!==height){sampleFrame.width=width;sampleFrame.height=height;}
+    samplePixels.drawImage(video,0,0,width,height);
+  }
+  enqueue(()=>vision.infer(matched?sampleFrame:video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper',headHint}))
+    .then(result=>{
+      if(id!==operation||syncId!==syncChange)return;
+      const at=performance.now();
+      applyTracking(result,at,matched);
+      state.capturedAt=matched?at:0;
+    })
     .catch(e=>{if(id===operation)fail(e,id);})
     .finally(()=>{pending=false;});
+}
+
+function matchCamera(result){
+  if(state.source==='live'&&state.sync==='matched'&&result.rig&&result.at===state.capturedAt&&result.at!==state.paintedAt){
+    if(cameraFrame.width!==sampleFrame.width||cameraFrame.height!==sampleFrame.height){
+      cameraFrame.width=sampleFrame.width;cameraFrame.height=sampleFrame.height;
+    }
+    cameraPixels.drawImage(sampleFrame,0,0);
+    state.paintedAt=result.at;
+  }
+  const matched=state.source==='live'&&state.sync==='matched'&&result.rig&&result.at===state.paintedAt;
+  cameraFrame.hidden=!matched;
+  const mode=matched?'matched':'direct';
+  if(stage.dataset.sync!==mode)stage.dataset.sync=mode;
 }
 
 const exposure=document.createElement('canvas');exposure.width=9;exposure.height=9;
@@ -554,7 +603,7 @@ function diagnostics(now,result){
     dimensions:media?[w,h]:null,detectorMs:ms(state.poseMs),maskMs:ms(state.maskMs),
     renderMs:ms(renderMs),fps,coverage:state.coverage,issue:state.issue||null,
     horizontalFov:state.lens,headFitPx:ms(rig?.reprojection??rig?.head?.reprojection),
-    shoulderContours:rig?.volume?.topCount??null,preview:state.inspection?'3d':'image'};
+    shoulderContours:rig?.volume?.topCount??null,preview:state.inspection?'3d':'image',cameraSync:stage.dataset.sync};
   if(!state.debug)return;
   $('fit-health').textContent=state.source==='studio'?'مانکن':statusLabels[result.status];
   $('fit-anchor').textContent=({face:'بینی و مش صورت',body:'مفصل و حجم تنه',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
@@ -580,7 +629,6 @@ function animate(now){
     return;
   }
   const inspection=Boolean(state.inspection);
-  if(live&&state.ready&&!inspection)sense(now);
   const result=fittedFrame(now), {rig,mask,alpha,status}=result;
   const viewButton=$('view-volume');
   const disabled=!rig||demo;
@@ -618,6 +666,7 @@ function animate(now){
   renderKey=key;lastPaint=now;
   const dt=Math.max(.003,Math.min(.045,(now-prev)/1000));
   prev=now;frame++;
+  matchCamera(result);
   const media=source(), rect=sourceRect(media);
   if(media&&(!live||frame%12===1))light(media,rig);
   const started=performance.now();
@@ -628,6 +677,7 @@ function animate(now){
     tailored:state.item.cut==='coat'||state.item.cut==='jacket'&&state.item.id!=='orion',coverage:state.coverage,occlusion:state.occlusion});
   renderMs=renderMs*.65+(performance.now()-started)*.35;
   reportCount++;
+  if(live&&state.ready&&!inspection)sense(now);
 }
 requestAnimationFrame(animate);
 
@@ -643,7 +693,7 @@ $('capture').addEventListener('click',()=>{
   const bg=g.createRadialGradient(bounds.w/2,bounds.h*.46,0,bounds.w/2,bounds.h*.46,bounds.w*.54);
   bg.addColorStop(0,'#7d6c5c');bg.addColorStop(1,'#352921');
   g.fillStyle=bg;g.fillRect(0,0,bounds.w,bounds.h);
-  const media=source();
+  const media=stage.dataset.sync==='matched'?cameraFrame:source();
   if(media&&!state.inspection)drawMedia(g,media,sourceRect(media),mirrored());
   if(state.source==='studio'||state.inspection){
     if(gpu()&&studio.draw(state.split?state.splitAt/100:0))g.drawImage(canvas,0,0,bounds.w,bounds.h);
@@ -660,10 +710,11 @@ $('capture').addEventListener('click',()=>{
 $('freeze').addEventListener('click',()=>{
   if(state.source!=='live'||!source())return;
   const id=operation;
-  const still=document.createElement('canvas'), scale=Math.min(1,1280/video.videoWidth);
-  still.width=Math.max(1,Math.round(video.videoWidth*scale));
-  still.height=Math.max(1,Math.round(video.videoHeight*scale));
-  drawMedia(still.getContext('2d'),video,{x:0,y:0,w:still.width,h:still.height},mirrored());
+  const media=stage.dataset.sync==='matched'?cameraFrame:video,[w,h]=mediaSize(media);
+  const still=document.createElement('canvas'), scale=Math.min(1,1280/w);
+  still.width=Math.max(1,Math.round(w*scale));
+  still.height=Math.max(1,Math.round(h*scale));
+  drawMedia(still.getContext('2d'),media,{x:0,y:0,w:still.width,h:still.height},mirrored());
   still.toBlob(blob=>{if(blob)loadPhoto(blob,id);},'image/jpeg',.93);
 });
 
@@ -700,6 +751,13 @@ $('split-slider').addEventListener('input',e=>{state.splitAt=Number(e.currentTar
 $('quality').addEventListener('change',e=>{state.high=e.currentTarget.value==='high';resize();});
 $('zoom').addEventListener('input',e=>{state.zoom=Number(e.currentTarget.value)/100;});
 $('response').addEventListener('change',e=>{state.response=e.currentTarget.value;});
+$('camera-sync').addEventListener('change',e=>{
+  state.sync=e.currentTarget.value;syncChange++;
+  if(state.source==='live'){
+    state.tracked=null;state.headFrame=null;state.capturedAt=state.paintedAt=0;
+    stable=null;lastFrame=-1;renderKey=null;
+  }
+});
 $('lens-angle').addEventListener('input',e=>{
   state.lens=Number(e.currentTarget.value);$('lens-value').textContent=show(state.lens)+'°';
 });
@@ -709,7 +767,8 @@ $('camera-facing').addEventListener('change',e=>{
   if(state.source==='live')changeSource('live');
 });
 $('mirror').addEventListener('change',e=>{
-  state.mirror=e.currentTarget.checked;stable=null;video.classList.toggle('is-mirror',mirrored());
+  state.mirror=e.currentTarget.checked;stable=null;
+  for(const view of [video,cameraFrame])view.classList.toggle('is-mirror',mirrored());
 });
 function refreshPhotoMask(){
   if(semantic()&&state.source==='photo'&&photoURL&&!state.mask&&!state.busy)analyzePhoto(operation);

@@ -25,7 +25,7 @@ async function crop(file,name,u,v,w,h){
 const upper=await crop(photo,'upper-fixture',.27,.32,.47,.292);
 const close=await crop(portrait,'close-fixture',.095,.010,.81,.455);
 const closeVideo=resolve('.render/close-camera.y4m');
-execFileSync(process.execPath,['tests/y4m-fixture.mjs',close,closeVideo]);
+execFileSync(process.execPath,['tests/y4m-fixture.mjs',close,closeVideo,'--alignment-mark']);
 const root=resolve('dist');
 const headers={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json',
   '.wasm':'application/wasm','.webp':'image/webp','.woff2':'font/woff2','.svg':'image/svg+xml'};
@@ -275,8 +275,37 @@ try{
   await preview('near-live');
   await page.locator('button[data-frame=face]').click();
   await expectSignal('ردیابی چهره');
-  await page.locator('#stage[data-depth=face]').waitFor();
+  await page.locator('#stage[data-depth=face][data-sync=matched]').waitFor();
   const lensLive=await expectOverlay(p=>p.count>48&&p.w>60&&p.y<p.height*.52);
+  const alignment=[];
+  const deadline=Date.now()+26000;
+  while(Date.now()<deadline){
+    const point=await page.locator('#stage').evaluate(stage=>{
+      if(stage.dataset.sync!=='matched'||stage.dataset.depth!=='face')return null;
+      const rgb=stage.querySelector('#camera-frame'), fg=stage.querySelector('#foreground');
+      const {width,height}=rgb;
+      const mask=rgb.getContext('2d').getImageData(0,14,width,1).data;
+      let n=0,sum=0;
+      for(let x=0;x<width;x++)if(mask[x*4+1]>165&&mask[x*4]<105&&mask[x*4+2]<110){n++;sum+=x;}
+      if(n<5)return null;
+      const ratio=Math.min(fg.width/width,fg.height/height);
+      const drawing=fg.getContext('2d').getImageData(0,0,fg.width,fg.height).data;
+      let left=fg.width,right=0;
+      for(let y=0;y<fg.height*.54;y+=2)for(let x=0;x<fg.width;x+=2){
+        if(drawing[(y*fg.width+x)*4+3]<125)continue;
+        left=Math.min(left,x);right=Math.max(right,x);
+      }
+      if(right-left<55)return null;
+      // The marker follows the fixture's translation. The bridge in the source portrait is at x = .491 of its crop.
+      const expected=(fg.width-width*ratio)*.5+(width-(sum/n+width*(.491-.23)))*ratio;
+      return {expected,error:Math.abs(expected-(left+right)*.5)};
+    });
+    if(point&&alignment.every(x=>Math.abs(x.expected-point.expected)>7))alignment.push(point);
+    if(alignment.length>=3&&Math.max(...alignment.map(x=>x.expected))-Math.min(...alignment.map(x=>x.expected))>25)break;
+    await new Promise(resolve=>setTimeout(resolve,140));
+  }
+  assert.ok(alignment.length>=3&&Math.max(...alignment.map(x=>x.error))<24,JSON.stringify(alignment));
+  console.log('OK: moving optical frame stays aligned with the same camera pixels',alignment);
   await preview('glasses-live');
   await page.locator('button[data-source=studio]').click();
   assert.equal(await page.locator('#video').evaluate(v=>!!v.srcObject),false);
