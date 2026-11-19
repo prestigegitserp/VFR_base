@@ -139,8 +139,13 @@ export function solveHead(points, camera, eyeMm = 63) {
 
 export function rescaleHead(head, depth) {
   const scale = clamp(depth / head.depth, .57, 1.68);
-  return { ...head, depth: head.depth * scale, surface: head.surface.map(p => p.clone().multiplyScalar(scale)),
+  return { ...head, depth: head.depth * scale, size: head.size * scale,
+    surface: head.surface.map(p => p.clone().multiplyScalar(scale)),
     origin: head.origin.clone().multiplyScalar(scale), bridge: head.bridge.clone().multiplyScalar(scale) };
+}
+
+export function headJoint(head) {
+  return head.bridge.clone().add(V(0, -.102, -.080).multiplyScalar(head.size).applyQuaternion(head.q));
 }
 
 export function referencePoints() {

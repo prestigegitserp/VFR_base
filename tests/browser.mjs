@@ -163,10 +163,13 @@ try{
   assert.ok(diag.mask && diag.source==='photo' && diag.trackingScore>=50);
   console.log('OK: cropped photo has fitted pixels, alignment and mask controls, sanitized diagnostics',initial,adjusted);
   await page.locator('#photo-file').setInputFiles(close);
+  const closeWidth=jpeg.decode(await readFile(close)).width;
+  await page.waitForFunction(w=>document.querySelector('#photo').naturalWidth===w,closeWidth);
   await expectSignal('پرو روی عکس');
-  await page.locator('#stage[data-depth=body]').waitFor();
+  await page.locator('#stage[data-depth=body][data-matte=active]').waitFor();
   const tight=await overlay();
   assert.ok(tight.count>170 && tight.y>tight.height*.29 && tight.h>42,JSON.stringify(tight));
+  assert.equal(await page.locator('#message').isVisible(),false);
   await preview('near');
   await page.locator('#view-volume').click();
   await page.locator('#stage[data-view=model]').waitFor();

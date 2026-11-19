@@ -1,6 +1,6 @@
 import * as T from 'three';
 import { clamp } from './catalog.js';
-import { rescaleHead } from './camera-fit.js';
+import { headJoint, rescaleHead } from './camera-fit.js';
 
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
 const mix = (a, b, t) => a + (b - a) * t;
@@ -88,6 +88,19 @@ function axes(shoulders, hips) {
   return { side, up, forward, q: new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(side, up, forward)) };
 }
 
+function attachHead(head, ideal, depth, width) {
+  const joint = headJoint(head);
+  const distance = joint.length();
+  const ray = joint.clone().divideScalar(distance);
+  const along = ray.dot(ideal);
+  const radialError = ray.clone().multiplyScalar(along).distanceTo(ideal);
+  if (radialError > width * .45) return null;
+  const tolerance = width * .26;
+  const slide = Math.sqrt(Math.max(.00065, tolerance * tolerance - radialError * radialError));
+  const multiplier = clamp(mix(depth / head.depth, along / distance, .65), (along - slide) / distance, (along + slide) / distance);
+  return rescaleHead(head, head.depth * multiplier);
+}
+
 export function solveBody(input, mode, camera, head, profile) {
   const { pose, world, face, mask, maskShift } = input;
   const read = readMask(mask, maskShift);
@@ -151,15 +164,15 @@ export function solveBody(input, mode, camera, head, profile) {
   const facial = head && Math.abs(head.faceCenter.x - middle.x) < span * .61 &&
     head.faceCenter.y < middle.y + vertical * .12;
   const faceDepth = poseStable && visible(pose?.[0], .46, .11) ? -real(0).z : depth - width * .18;
-  const fittedHead = facial ? rescaleHead(head, clamp(faceDepth, depth - width * .94, depth + width * .18)) : null;
-  const jaw = fittedHead?.surface[152];
-  const jawLocal = jaw ? local(jaw) : null;
   const averageCrown = (crowns[0].y + crowns[1].y) * .5;
   const neck = {
-    center: V(jawLocal ? clamp(jawLocal.x * .15, -.036, .036) : 0,
-      Math.max(.016, averageCrown + .014), -.017),
+    center: V(0, Math.max(.016, averageCrown + .014), -.017),
     rx: width * .144, rz: width * .132,
   };
+  const neckTarget = worldAt(neck.center.clone().add(V(0, .067, -.019)));
+  const fittedHead = facial ? attachHead(head, neckTarget, faceDepth, width) : null;
+  if (fittedHead) neck.center.x = clamp(local(fittedHead.surface[152]).x * .145, -.035, .035);
+  neck.joint = fittedHead ? local(headJoint(fittedHead)) : neck.center.clone().add(V(0, .091, .004));
 
   const rings = [
     [.20, .433, .230], [.37, .445, .252], [.66, .389, .224], [1, .432, .235],
@@ -213,7 +226,7 @@ export function solveBody(input, mode, camera, head, profile) {
     screenSlope: (projectedSide.y - middle.y) / Math.max(.002, projectedSide.x - middle.x),
     sections: { chest: { center: worldAt(rings[1].center) }, waist: { center: worldAt(rings[2].center) },
       hip: { center: worldAt(rings[3].center) } },
-    volume: { width, length, neck, rings, crowns, jaw: jawLocal, topCount, profile, leg: leg.map(chain => chain.map(local)) },
+    volume: { width, length, neck, rings, crowns, topCount, profile, leg: leg.map(chain => chain.map(local)) },
   };
 }
 

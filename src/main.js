@@ -244,7 +244,11 @@ function resetVision() {
   state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.delegate='';state.issue='';
   projection=null;headProjection=null;stable=null;state.headFrame=null;state.faceProbe=0;
   state.inspection=null;state.orbit=0;
+  ctx.save();ctx.resetTransform();ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.restore();
+  renderKey=null;
   stage.dataset.fit='none';
+  stage.dataset.depth='none';
+  stage.dataset.matte='off';
   delete stage.dataset.mask;delete stage.dataset.vision;delete stage.dataset.landmarks;
   smoothPose.clear();smoothWorld.clear();smoothFace.clear();
   lastFrame=-1;
@@ -351,6 +355,10 @@ function pickPhoto(){$('photo-file').value='';$('photo-file').click();}
 let photoRead=0;
 async function loadPhoto(file, cameraId=null){
   const request=++photoRead;
+  if(cameraId==null&&state.source==='photo'){
+    ++operation;resetVision();state.busy=true;img.hidden=true;
+    signal('آماده‌کردن عکس','pending');controls();
+  }
   const url=URL.createObjectURL(file);
   const test=new Image();test.src=url;
   try{
@@ -364,7 +372,14 @@ async function loadPhoto(file, cameraId=null){
     if(request!==photoRead||(cameraId==null?state.source!=='photo':state.source!=='live'||cameraId!==operation))return;
     if(cameraId!=null){changeSource('photo');return;}
     resetVision();controls();await analyzePhoto(++operation);
-  }catch{if(photoURL!==url)URL.revokeObjectURL(url);toast('عکس باز نشد. فایل JPEG یا PNG امتحان کن.');}
+  }catch{
+    if(photoURL!==url)URL.revokeObjectURL(url);
+    if(request===photoRead&&state.source==='photo'){
+      state.busy=false;img.hidden=!photoURL;
+      signal('عکس باز نشد','pending');controls();
+    }
+    toast('عکس باز نشد. فایل JPEG یا PNG امتحان کن.');
+  }
 }
 $('photo-file').addEventListener('change',(e)=>{
   const file=e.currentTarget.files[0];

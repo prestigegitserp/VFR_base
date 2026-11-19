@@ -148,7 +148,7 @@ export class FittedStage {
     positions.needsUpdate = true;
     if (this.inspecting) {
       this.face.computeVertexNormals();
-      this.skull.position.copy(head.bridge).add(V(0, .001, -.085).applyQuaternion(head.q));
+      this.skull.position.copy(head.bridge).add(V(0, .001, -.085).multiplyScalar(head.size).applyQuaternion(head.q));
       this.skull.quaternion.copy(head.q);
       this.skull.scale.set(.071 * head.size, .100 * head.size, .066 * head.size);
     }
@@ -157,15 +157,12 @@ export class FittedStage {
   poseBody(rig, local, arms, inspection) {
     this.body.position.copy(rig.origin);
     this.body.quaternion.copy(rig.q);
-    const { neck, jaw, length, width, rings } = rig.volume;
+    const { neck, length, width, rings } = rig.volume;
     const base = neck.center.clone().add(V(0, -.031, -.003));
-    const cap = neck.center.clone().add(V(jaw ? clamp(jaw.x * .24, -.055, .055) : 0,
-      jaw ? clamp(jaw.y - neck.center.y, .026, .104) : .093,
-      jaw ? clamp(jaw.z * .48, -.017, .079) : .004));
-    capsule(this.neck, base, cap, neck.rx * .97, neck.rz * .91);
+    capsule(this.neck, base, neck.joint, neck.rx * .89, neck.rz * .83);
     rings.forEach((ring, i) => {
       const mesh = this.trunk[i];
-      mesh.visible = true;
+      mesh.visible = !inspection || this.item.cut === 'dress' || this.item.cut === 'skirt';
       mesh.position.copy(ring.center);
       mesh.scale.set(ring.rx * .93, length * (i === 0 ? .149 : .215), ring.rz * .90);
     });
@@ -173,7 +170,7 @@ export class FittedStage {
     arms.forEach((chain, i) => {
       capsule(this.limbs[i * 2], chain[0], chain[1], width * .102, width * .091);
       capsule(this.limbs[i * 2 + 1], chain[1], chain[2], width * .076, width * .068);
-      for (const limb of this.limbs.slice(i * 2, i * 2 + 2)) limb.visible = inspection || bareSleeves;
+      for (const limb of this.limbs.slice(i * 2, i * 2 + 2)) limb.visible = bareSleeves;
     });
     rig.hands.forEach((hand, i) => {
       capsule(this.limbs[4 + i], hand.wrist, hand.palm, hand.radius, hand.radius * .76);
@@ -232,8 +229,10 @@ export class FittedStage {
     if (inspection) {
       const center = rig.origin.clone();
       center.x *= mirror ? -1 : 1;
-      center.y -= mode === 'face' ? .026 : rig.full ? .35 : .13;
-      const distance = mode === 'face' ? .46 : rig.full ? 2.0 : 1.12;
+      const top = mode === 'face' ? rig.surface[10].y + .065 : (rig.head?.surface[10].y ?? center.y + .23) + .055;
+      const bottom = mode === 'face' ? rig.surface[152].y - .042 : center.y - (rig.full ? 1.02 : .66);
+      center.y = (top + bottom) / 2;
+      const distance = Math.max(mode === 'face' ? .49 : 1.05, (top - bottom) / .67);
       const angle = orbit * Math.PI / 180;
       cam.fov = 41;
       cam.position.copy(center).add(V(Math.sin(angle) * distance, mode === 'face' ? .014 : .053, Math.cos(angle) * distance));
