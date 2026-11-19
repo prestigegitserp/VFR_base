@@ -1,15 +1,13 @@
-name: Deploy VFR Studio to GitHub Pages
-
-# Publish the validated application tree from the environment's default branch.
+name: Deploy VFR versions to GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/pages.yml']
+    paths: ['.github/workflows/pages.yml', '.github/workflows/validate-v2.yml']
   workflow_dispatch:
   workflow_run:
-    workflows: [Validate VFR Studio]
-    branches: [v1]
+    workflows: [Validate VFR Studio, Validate VFR Atelier]
+    branches: [v1, v2]
     types: [completed]
 
 permissions:
@@ -23,13 +21,14 @@ jobs:
   build:
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [v1, v2]
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'refs/heads/v1' }}
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == matrix.version && github.event.workflow_run.head_sha || format('refs/heads/{0}', matrix.version) }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -39,15 +38,46 @@ jobs:
       - run: npm test
       - run: npm run stage:models
       - run: npm run build
-      - name: Record source revision
+      - name: Record deployed source
         run: git rev-parse HEAD > dist/source-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vfr-pages-${{ matrix.version }}
+          path: dist/
+          retention-days: 3
+
+  assemble:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vfr-pages-*
+          path: releases
+      - name: Retain the root and version routes
+        shell: bash
+        run: |
+          mkdir -p pages/v1 pages/v2
+          cp -a releases/vfr-pages-v1/. pages/
+          cp -a releases/vfr-pages-v1/. pages/v1/
+          cp -a releases/vfr-pages-v2/. pages/v2/
+          touch pages/.nojekyll
+          test -s pages/v1/index.html
+          test -s pages/v2/index.html
+          cmp pages/source-commit.txt pages/v1/source-commit.txt
+          test -s pages/v2/runtime/face.task
+          test -s pages/v2/runtime/mask.tflite
+          test -s pages/v2/protocol/atelier-scanned.zip
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: pages/
 
   deploy:
-    needs: build
+    needs: assemble
     runs-on: ubuntu-24.04
     permissions:
       pages: write

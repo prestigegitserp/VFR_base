@@ -1,5 +1,8 @@
 # VFR Studio
 
-[اتاق پرو آنلاین در GitHub Pages](https://prestigegitserp.github.io/VFR_base/)
+| نسخه | سایت GitHub Pages | کد |
+|---|---|---|
+| ۲ · آتلیه | [اتاق پرو، سایز و اسکن GLB](https://prestigegitserp.github.io/VFR_base/v2/) | [`v2`](https://github.com/prestigegitserp/VFR_base/tree/v2) |
+| ۱ · استودیو | [نسخهٔ اول](https://prestigegitserp.github.io/VFR_base/v1/) | [`v1`](https://github.com/prestigegitserp/VFR_base/tree/v1) |
 
-کد، مدل‌های لباس و راهنمای اجرای نسخهٔ اول در [شاخهٔ `v1`](https://github.com/prestigegitserp/VFR_base/tree/v1) قرار دارند.
+[نشانی اولیهٔ استودیو](https://prestigegitserp.github.io/VFR_base/) همچنان نسخهٔ ۱ را باز می‌کند.
