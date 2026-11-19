@@ -74,6 +74,23 @@ function topOfShoulder(read, mask, p, inward, vertical) {
   return { x: p.x, y: estimates[Math.floor(estimates.length / 2)] };
 }
 
+function shoulderOutline(read, mask, p, middle, vertical) {
+  if (!mask) return [];
+  const step = 1 / mask.h, outline = [];
+  for (const distance of [.25,.41,.57,.73,.89,1.04,1.15]) {
+    const x = mix(middle.x, p.x, distance);
+    if (x < .025 || x > .975) continue;
+    const start = Math.max(.02, p.y - vertical * .36), end = Math.min(.98, p.y + vertical * .28);
+    for (let y = start; y < end; y += step) {
+      if (clothed(read(x, y)) && clothed(read(x, y + 2 * step)) && clothed(read(x, y + 5 * step))) {
+        outline.push({ x, y, distance });
+        break;
+      }
+    }
+  }
+  return outline.length >= 3 ? outline : [];
+}
+
 function axes(shoulders, hips) {
   const side = shoulders[1].clone().sub(shoulders[0]).normalize();
   const across = V(side.x, side.y).normalize();
@@ -161,6 +178,11 @@ export function solveBody(input, mode, camera, head, profile) {
     return q;
   });
   const topCount = shoulderProfiles.filter(Boolean).length;
+  const ridges = points.map((p, i) => mode==='upper' ? shoulderOutline(read,mask,p,middle,vertical).map(u => {
+    const onSurface = local(camera.ray(u, mix(depth, -shoulder[i].z, clamp(u.distance, 0, 1))));
+    onSurface.y = clamp(onSurface.y, -.081, width * .31);
+    return onSurface;
+  }) : []);
   const facial = head && Math.abs(head.faceCenter.x - middle.x) < span * .61 &&
     head.faceCenter.y < middle.y + vertical * .12;
   const faceDepth = poseStable && visible(pose?.[0], .46, .11) ? -real(0).z : depth - width * .18;
@@ -226,7 +248,7 @@ export function solveBody(input, mode, camera, head, profile) {
     screenSlope: (projectedSide.y - middle.y) / Math.max(.002, projectedSide.x - middle.x),
     sections: { chest: { center: worldAt(rings[1].center) }, waist: { center: worldAt(rings[2].center) },
       hip: { center: worldAt(rings[3].center) } },
-    volume: { width, length, neck, rings, crowns, topCount, profile, leg: leg.map(chain => chain.map(local)) },
+    volume: { width, length, neck, rings, crowns, ridges, topCount, profile, leg: leg.map(chain => chain.map(local)) },
   };
 }
 

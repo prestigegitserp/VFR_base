@@ -104,6 +104,17 @@ function nudgeLeg(p, volume) {
   }
 }
 
+function crestAt(profile, x) {
+  if (!profile?.length) return null;
+  const t = Math.abs(x);
+  if (t <= Math.abs(profile[0].x)) return profile[0].y;
+  for (let i = 1; i < profile.length; i++) {
+    const a = profile[i - 1], b = profile[i], edge = Math.abs(b.x);
+    if (t <= edge) return mix(a.y, b.y, (t - Math.abs(a.x)) / Math.max(.002, edge - Math.abs(a.x)));
+  }
+  return profile.at(-1).y;
+}
+
 export function makeLiveShell(item, size, color) {
   const measures = size.garment, coat = item.cut === 'coat', knit = item.cut === 'knit';
   const zipped = item.id === 'orion', tailored = coat || item.cut === 'jacket' && !zipped;
@@ -269,6 +280,15 @@ export function makeLiveShell(item, size, color) {
         x += (Math.sign(sa) * (Math.abs(side.x) + pad + extra) - baseX) * rise * .63;
         y = mix(collarY, y, t) + rise * (side.y * .50 + .0085);
         z = mix(neck.center.z + ca * (neck.rz + .007 + extra), z, blend);
+        const ridge = volume.ridges?.[sa < 0 ? 0 : 1];
+        if (ridge?.length) {
+          const weight = ease((Math.abs(x) - neck.rx * 1.09) / (width * .20)) *
+            ease((drop - .018) / .050) * (1 - ease((drop - .077) / .090));
+          const target = crestAt(ridge, x);
+          y += clamp(target - y - .002, -.019, .095) * weight;
+          const outside = Math.abs(ridge.at(-1).x) - Math.abs(side.x);
+          x += Math.sign(sa) * clamp(outside, 0, width * .10) * weight * Math.abs(sa) ** 2;
+        }
       }
       const weight = ease((drop - .22) / Math.max(.16, length - .22));
       const wind = breeze ? flutter * .014 * Math.sin(phase * 2.2 + a * 2.5) : 0;

@@ -61,6 +61,7 @@ test('seated near-camera fit measures shoulders and keeps neckline behind a forw
   assert.ok(rig?.volume && rig.hip===null);
   assert.ok(rig.head && rig.head.depth < rig.depth);
   assert.ok(rig.volume.topCount>=1);
+  assert.ok(rig.volume.ridges.some(ridge=>ridge.length>=3));
   assert.ok(rig.volume.neck.joint.distanceTo(rig.volume.neck.center)<rig.volume.width*.47);
   const joint=camera.pixel(fixture.pose[16]), fitted=camera.screen(rig.arms[1][2]);
   assert.ok(Math.hypot(joint.x-fitted.x,joint.y-fitted.y)<.01);
