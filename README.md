@@ -2,6 +2,7 @@
 
 | نسخه | سایت GitHub Pages | کد |
 |---|---|---|
+| ۳ · آتلیه | [تن‌خور بدن‌محور، ردیابی و عیب‌یابی](https://prestigegitserp.github.io/VFR_base/v3/) | [`v3`](https://github.com/prestigegitserp/VFR_base/tree/v3) |
 | ۲ · آتلیه | [اتاق پرو، سایز و اسکن GLB](https://prestigegitserp.github.io/VFR_base/v2/) | [`v2`](https://github.com/prestigegitserp/VFR_base/tree/v2) |
 | ۱ · استودیو | [نسخهٔ اول](https://prestigegitserp.github.io/VFR_base/v1/) | [`v1`](https://github.com/prestigegitserp/VFR_base/tree/v1) |
 
