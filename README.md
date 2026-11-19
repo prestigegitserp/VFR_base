@@ -27,7 +27,7 @@ npm run build
 
 ### GitHub Pages
 
-گردش‌کار [Pages](.github/workflows/pages.yml) شاخهٔ `v1` را آزمایش و بسته‌بندی می‌کند. برای انتشار روی دامنهٔ GitHub از Settings → Pages، منبع را روی **GitHub Actions** قرار دهید. در مخزن عمومی فعلی، دامنهٔ Pages پس از فعال‌سازی مستقل از پیش‌نمایش آنلاین بالا می‌آید.
+گردش‌کار [اعتبارسنجی](.github/workflows/pages.yml) برنامهٔ شاخهٔ `v1` را می‌سازد و آزمایش می‌کند. آزمون مرورگر با عکس و جریان ویدئوی نمونه، مسیر MediaPipe، WebGL2، انتخاب قالب و قطع دوربین را بررسی می‌کند. گردش‌کار [انتشار در main](https://github.com/prestigegitserp/VFR_base/blob/main/.github/workflows/pages.yml) نسخهٔ تأییدشدهٔ `v1` را روی Pages مستقر می‌کند. منبع Pages از نوع **GitHub Actions** است.
 
 ### بازتولید رندرها
 

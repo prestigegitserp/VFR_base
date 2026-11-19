@@ -1,25 +1,20 @@
-name: Build VFR Studio and publish Pages
+name: Validate VFR Studio
 
 on:
   push:
     branches: [v1]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: vfr-studio-pages
+  group: vfr-studio-validation
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-    outputs:
-      pages: ${{ steps.pages.outcome }}
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,25 +27,12 @@ jobs:
       - run: npm test
       - run: npm run stage:models
       - run: npm run build
-      - name: Confirm Pages settings
-        id: pages
-        uses: actions/configure-pages@v5
-        continue-on-error: true
-      - uses: actions/upload-pages-artifact@v3
-        if: steps.pages.outcome == 'success'
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    if: needs.build.outputs.pages == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - uses: actions/deploy-pages@v4
-        id: deploy
+      - name: Install Chromium for browser checks
+        run: npx playwright install --with-deps chromium
+      - name: Exercise photo and webcam fitting
+        shell: bash
+        run: |
+          mkdir -p .render
+          curl --fail --silent --show-error --retry 2 https://storage.googleapis.com/mediapipe-assets/pose.jpg -o .render/pose-fixture.jpg
+          ffmpeg -loglevel error -loop 1 -i .render/pose-fixture.jpg -vf 'scale=960:540:force_original_aspect_ratio=decrease,pad=960:540:(ow-iw)/2:(oh-ih)/2' -t 1 -r 20 -pix_fmt yuv420p .render/webcam-fixture.y4m
+          node tests/browser.mjs .render/pose-fixture.jpg .render/webcam-fixture.y4m
