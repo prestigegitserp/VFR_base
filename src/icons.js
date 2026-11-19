@@ -26,6 +26,7 @@ const shapes = {
   upload: '<path d="M4 17v3h16v-3m-8-1V4m-5 5 5-5 5 5"/>',
   scan: '<path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5m3-3h10"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  freeze: '<path d="M5 8V5h3m8 0h3v3m0 8v3h-3m-8 0H5v-3m5-6v4m4-4v4"/>',
 };
 export function icon(name) {
   return `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">${shapes[name] ?? ''}</svg>`;

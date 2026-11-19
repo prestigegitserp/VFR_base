@@ -1,0 +1,46 @@
+name: Validate VFR Atelier v3
+
+on:
+  push:
+    branches: [v3]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vfr-atelier-v3-validation
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run stage:models
+      - run: npm run build
+      - run: npx playwright install --only-shell chromium
+      - name: Test garment attachment on photos and moving camera frames
+        env:
+          VFR_BROWSER_SHOTS: '1'
+        run: |
+          mkdir -p .render
+          curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/pose.jpg -o .render/pose.jpg
+          curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/portrait.jpg -o .render/portrait.jpg
+          node tests/y4m-fixture.mjs .render/pose.jpg .render/camera.y4m
+          node tests/browser.mjs .render/pose.jpg .render/portrait.jpg .render/camera.y4m
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vfr-v3-visual-check
+          path: .render/pro-upper.jpg
+          retention-days: 3
+          if-no-files-found: ignore

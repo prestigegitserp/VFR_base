@@ -1,9 +1,9 @@
 import './style.css';
-import { asset, catalog, cm, compatible, fabrics, fitModes, form, forms, metrics, show, startingSize } from './catalog.js';
+import { asset, catalog, clamp, cm, compatible, fabrics, fitModes, form, forms, metrics, show, startingSize } from './catalog.js';
 import { Atelier } from './atelier.js';
 import { Vision } from './vision.js';
 import { bodyRig, contain, faceRig, Temporal } from './tracking.js';
-import { drawMedia, layerFrame } from './composite.js';
+import { drawMedia, FrameCompositor } from './composite.js';
 import { checkSize, chooseSize, manualProfile, TwoViewScan } from './sizing.js';
 import { listPackages, readBodyScan, storePackage, unpackPackage } from './protocol.js';
 import { lineFor, makeOrder } from './order.js';
@@ -18,28 +18,41 @@ const el=(tag,content,cls)=>{
   return n;
 };
 const stage=$('stage'), video=$('video'), img=$('photo'), canvas=$('render'), ctx=$('foreground').getContext('2d');
-const storage='vfr-atelier:v2:';
+const storage='vfr-atelier:v3:';
+try{
+  if(!localStorage.getItem(storage+'initialized')){
+    for(const key of ['profile','preference','cart']){
+      const old=localStorage.getItem('vfr-atelier:v2:'+key);
+      if(old!=null&&localStorage.getItem(storage+key)==null)localStorage.setItem(storage+key,old);
+    }
+    localStorage.setItem(storage+'initialized','true');
+  }
+}catch{/* Local preferences are optional. */}
 const get=(key)=>{try{return JSON.parse(localStorage.getItem(storage+key));}catch{return null;}};
 const put=(key,value)=>{
   try{ if(value==null)localStorage.removeItem(storage+key);else localStorage.setItem(storage+key,JSON.stringify(value)); }
   catch{/* Preview and imports can run without local preferences. */}
 };
 const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const emptyAlignment=()=>({x:0,y:0,width:0,length:0});
 const state={
   source:'studio',mode:'full',item:catalog[0],size:startingSize(catalog[0]),color:0,formId:catalog[0].form,formPinned:false,
   body:get('profile'),preference:get('preference')??'regular',cart:get('cart')??[],filter:'all',records:new Map(),
   move:!reduce,wind:false,turn:0,zoom:1,high:false,mirror:true,occlusion:true,debug:false,split:0,splitAt:50,apply:false,
-  busy:false,ready:false,tracked:null,mask:null,stamp:0,delegate:'',lastInfer:0,light:.50,scan:null,
+  coverage:'balanced',response:'steady',camera:'user',alignment:{full:emptyAlignment(),upper:emptyAlignment(),face:emptyAlignment()},
+  busy:false,ready:false,tracked:null,mask:null,delegate:'',lastInfer:0,poseMs:0,maskMs:0,light:.50,scan:null,issue:'',
 };
-const vision=new Vision(), smoothPose=new Temporal(), smoothFace=new Temporal();
+const vision=new Vision(), smoothPose=new Temporal(), smoothWorld=new Temporal(), smoothFace=new Temporal([33,263]);
+const compositor=new FrameCompositor();
 const urls=new Map();
 let studio, stream, photoURL, frame=0, operation=0, display=0, pending=false, resultTime=0, lastFrame=-1;
 let commands=Promise.resolve(), metricsAt=0, reportCount=0, prev=0, noticeTimer, messageAction, guidanceAction;
-let bounds={w:1,h:1}, renderKey=null;
+let bounds={w:1,h:1}, renderKey=null, projection=null, rigRevision=0, stable=null, lastPaint=0, statsAt=0, renderMs=0, fps=0;
 const enqueue=(fn)=>{const p=commands.then(fn);commands=p.catch(()=>{});return p;};
 const gpu=()=>!!studio&&!studio.lost;
-const semantic=()=>state.occlusion||state.mode==='upper'||Boolean(state.scan);
+const semantic=()=>state.occlusion||state.mode==='upper'||state.mode!=='face'&&state.coverage!=='off'||Boolean(state.scan);
 const source=()=>state.source==='live'&&video.readyState>=2?video:state.source==='photo'&&img.complete&&img.naturalWidth?img:null;
+const mirrored=()=>state.source==='live'&&state.mirror;
 const mediaSize=(m)=>[m?.videoWidth??m?.naturalWidth,m?.videoHeight??m?.naturalHeight];
 const sourceRect=(media)=>{
   const [w,h]=mediaSize(media);
@@ -161,6 +174,13 @@ function controls(){
   $('wind').disabled=!supported||!['dress','skirt','coat'].includes(state.item.cut)||state.item.source==='scan'||!hasFrame;
   $('compare').disabled=!supported||!hasFrame;
   $('capture').disabled=!hasFrame;
+  $('freeze').hidden=state.source!=='live';
+  $('freeze').disabled=!supported||!source()||state.busy;
+  $('adjust-fit').hidden=demo;
+  $('adjust-fit').disabled=!supported;
+  if(demo&&$('alignment-dialog').open)$('alignment-dialog').close();
+  press($('inspect'),state.debug);
+  $('inspector').hidden=!state.debug;
   press($('motion'),state.move);press($('wind'),state.wind&&!$('wind').disabled);press($('compare'),state.split>0&&!$('compare').disabled);
   $('split').hidden=!(state.split&&hasFrame&&supported);
   $('split').style.setProperty('--split',`${state.splitAt}%`);
@@ -210,10 +230,12 @@ $('size-select').addEventListener('change',(e)=>{
 $$('button[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.filter=b.dataset.filter;showList(true);}));
 
 function resetVision() {
-  state.ready=false;state.tracked=null;state.mask=null;state.stamp=0;
-  state.lastInfer=0;state.delegate='';
+  state.ready=false;state.tracked=null;state.mask=null;
+  state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.delegate='';state.issue='';
+  projection=null;stable=null;
+  stage.dataset.fit='none';
   delete stage.dataset.mask;delete stage.dataset.vision;delete stage.dataset.landmarks;
-  smoothPose.clear();smoothFace.clear();
+  smoothPose.clear();smoothWorld.clear();smoothFace.clear();
   lastFrame=-1;
   guide(null);message();
 }
@@ -250,6 +272,7 @@ function changeSource(mode) {
 function changeFrame(mode,selectCompatible=true) {
   if(mode===state.mode)return;
   state.mode=mode;state.turn=0;state.zoom=1;$('zoom').value='100';
+  syncAlignment();
   const id=++operation;
   const needsCamera=state.source==='live'&&!stream&&state.busy;
   state.scan=null;state.split=0;
@@ -272,14 +295,14 @@ async function startCamera(id) {
   try {
     if(!navigator.mediaDevices?.getUserMedia)throw new Error('این مرورگر دسترسی دوربین را روی این آدرس فعال نمی‌کند.');
     const videoStream=await navigator.mediaDevices.getUserMedia({
-      video:{width:{ideal:1280},height:{ideal:720},facingMode:'user',frameRate:{ideal:30}},audio:false,
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:{ideal:state.camera},frameRate:{ideal:30}},audio:false,
     });
     if(id!==operation){videoStream.getTracks().forEach(t=>t.stop());return;}
     stream=videoStream;
     video.srcObject=stream;video.hidden=false;
-    video.classList.toggle('is-mirror',state.mirror);
+    video.classList.toggle('is-mirror',mirrored());
     await video.play();
-    stream?.getVideoTracks()[0]?.addEventListener('ended',()=>{if(state.source==='live')fail(new Error('جریان دوربین قطع شد.'),operation);},{once:true});
+    videoStream.getVideoTracks()[0]?.addEventListener('ended',()=>{if(stream===videoStream)fail(new Error('جریان دوربین قطع شد.'),operation);},{once:true});
     if(id===operation)await setupCamera(id);
   }catch(e){fail(e,id);}
 }
@@ -301,6 +324,7 @@ function fail(error,id){
   const live=state.source==='live';
   if(live)stop();
   resetVision();state.busy=false;state.scan=null;
+  state.issue=error.name&&error.name!=='Error'?error.name:'vision-unavailable';
   const common={
     NotAllowedError:'اجازهٔ دوربین برای این صفحه صادر نشده است.',
     NotFoundError:'دوربین متصل پیدا نشد.',
@@ -313,22 +337,29 @@ function fail(error,id){
 }
 
 function pickPhoto(){$('photo-file').value='';$('photo-file').click();}
-$('photo-file').addEventListener('change',async(e)=>{
-  const file=e.currentTarget.files[0];
-  if(!file)return;
-  if(!file.type.startsWith('image/')||file.size>24_000_000){toast('عکس JPEG، PNG، WebP یا AVIF تا ۲۴ مگابایت انتخاب کن.');return;}
+let photoRead=0;
+async function loadPhoto(file, cameraId=null){
+  const request=++photoRead;
   const url=URL.createObjectURL(file);
   const test=new Image();test.src=url;
   try{
     await test.decode();
-    if(state.source!=='photo'){URL.revokeObjectURL(url);return;}
+    if(request!==photoRead || (cameraId==null ? state.source!=='photo' : state.source!=='live'||cameraId!==operation)){
+      URL.revokeObjectURL(url);return;
+    }
     if(photoURL)URL.revokeObjectURL(photoURL);
-    photoURL=url;img.src=url;img.hidden=false;
+    photoURL=url;img.src=url;img.hidden=cameraId!=null;
     await img.decode();
-    const id=++operation;
-    resetVision();controls();
-    await analyzePhoto(id);
+    if(request!==photoRead||(cameraId==null?state.source!=='photo':state.source!=='live'||cameraId!==operation))return;
+    if(cameraId!=null){changeSource('photo');return;}
+    resetVision();controls();await analyzePhoto(++operation);
   }catch{if(photoURL!==url)URL.revokeObjectURL(url);toast('عکس باز نشد. فایل JPEG یا PNG امتحان کن.');}
+}
+$('photo-file').addEventListener('change',(e)=>{
+  const file=e.currentTarget.files[0];
+  if(!file)return;
+  if(!file.type.startsWith('image/')||file.size>24_000_000){toast('عکس JPEG، PNG، WebP یا AVIF تا ۲۴ مگابایت انتخاب کن.');return;}
+  loadPhoto(file);
 });
 async function analyzePhoto(id){
   const mode=state.mode;
@@ -350,14 +381,18 @@ async function analyzePhoto(id){
 
 function applyTracking(result,at){
   state.delegate=result.delegate;state.lastInfer=result.timeMs;
+  state.poseMs=result.poseMs;state.maskMs=result.maskMs || state.maskMs;
+  state.issue=result.underlyingError?'mask-unavailable':'';
   stage.dataset.vision=vision.worker?'worker':'main';
-  if(result.mask)stage.dataset.mask='ready';
   stage.dataset.landmarks=String((result.pose?.length??0)+(result.face?.length??0));
-  const {pose,face,mask,matrix}=result;
-  state.tracked={pose:pose?smoothPose.update(pose,at):null,face:face?smoothFace.update(face,at):null,matrix,
-    mask:mask??state.mask};
-  if(mask)state.mask=mask;
-  if(pose||face)state.stamp=at;
+  const {pose,world,face,mask,matrix}=result;
+  const live=state.source==='live';
+  const track=(filter,points)=>live&&points?filter.update(points,at,state.response):points;
+  state.tracked={pose:track(smoothPose,pose),world:track(smoothWorld,world),face:track(smoothFace,face),matrix,at};
+  if(mask){
+    stage.dataset.mask='ready';
+    state.mask={frame:mask,at,anchor:trackingCenter(pose,face)};
+  }
   if(state.scan&&mask&&pose){
     const [w,h]=mediaSize(video);
     const next=state.scan.sensor;
@@ -367,19 +402,62 @@ function applyTracking(result,at){
   }
 }
 
-function project() {
+function trackingCenter(pose,face){
+  const pair=pose?.[11]?.visibility>=.50&&pose?.[12]?.visibility>=.50?[pose[11],pose[12]]:
+    face?.[33]&&face?.[263]?[face[33],face[263]]:null;
+  return pair?{x:(pair[0].x+pair[1].x)/2,y:(pair[0].y+pair[1].y)/2}:null;
+}
+
+function currentMask(now){
+  const snapshot=state.mask;
+  if(!snapshot)return null;
+  if(state.source==='live'&&now-snapshot.at>clamp(state.lastInfer*2.6+190,335,670))return null;
+  const center=trackingCenter(state.tracked?.pose,state.tracked?.face);
+  const anchor=snapshot.anchor;
+  const shift=center&&anchor?{x:center.x-anchor.x,y:center.y-anchor.y}:{x:0,y:0};
+  return Math.abs(shift.x)<.12&&Math.abs(shift.y)<.14?{frame:snapshot.frame,shift}:null;
+}
+
+function project(now=performance.now()) {
   const rect=sourceRect(source());
   if(!state.tracked||!rect)return null;
-  const stages=state.tracked;
-  return state.mode==='face'
-    ? faceRig(stages.face,stages.matrix,rect,bounds,state.source==='live'&&state.mirror,state.body)
-    : bodyRig(stages,state.mode,rect,bounds,state.source==='live'&&state.mirror,studio?.reference??{torso:.45,shoulder:400},state.body);
+  const tracked=state.tracked, usable=currentMask(now), mask=usable?.frame, mirror=mirrored(), reference=studio?.reference;
+  if(projection?.tracked===tracked&&projection.mask===mask&&projection.bounds===bounds&&projection.mirror===mirror&&
+      projection.reference===reference&&projection.body===state.body)return projection.rig;
+  const stages={...tracked,mask,maskShift:usable?.shift};
+  const rig=state.mode==='face'
+    ? faceRig(stages.face,stages.matrix,rect,bounds,mirror,state.body)
+    : bodyRig(stages,state.mode,rect,bounds,mirror,reference??{torso:.45,shoulder:400},state.body);
+  if(rig&&usable)rig.maskShift=usable.shift;
+  projection={tracked,mask,bounds,mirror,reference,body:state.body,rig};
+  rigRevision++;
+  return rig;
+}
+
+function fittedFrame(now){
+  const age=now-(state.tracked?.at??0);
+  const maxAge=clamp(state.lastInfer*2.35+72,255,530);
+  const live=state.source==='live';
+  const found=live&&age>maxAge?null:project(now);
+  if(found){
+    const frame={rig:found,mask:projection.mask,at:state.tracked.at,alpha:found.kind==='estimate'?.84:1,
+      status:found.kind==='estimate'?'estimate':'locked'};
+    stable=frame;
+    return frame;
+  }
+  if(live&&stable){
+    const passed=now-stable.at;
+    const lifetime=state.tracked?.at===stable.at?maxAge+165:clamp(state.lastInfer+120,175,310)+140;
+    if(passed<lifetime)return {...stable,alpha:stable.alpha*clamp((lifetime-passed)/140,0,1),status:'hold'};
+  }
+  return {rig:null,mask:null,alpha:0,status:'none'};
 }
 function sense(now){
-  if(!state.ready||pending||video.readyState<2||video.currentTime===lastFrame||now-resultTime<Math.max(state.high?39:52,state.lastInfer*.93))return;
+  const target=state.response==='fast'?42:59;
+  if(!state.ready||pending||video.readyState<2||video.currentTime===lastFrame||now-resultTime<Math.max(target,state.poseMs*.93))return;
   pending=true;lastFrame=video.currentTime;resultTime=now;
   const id=operation, mode=state.mode;
-  const masks=semantic()&&(state.scan||mode==='upper'&&frame%2===0||frame%3===0);
+  const masks=semantic()&&(state.scan||!state.mask||now-state.mask.at>clamp(state.maskMs*1.31+69,105,315));
   enqueue(()=>vision.infer(video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper'}))
     .then(result=>{if(id===operation)applyTracking(result,performance.now());})
     .catch(e=>{if(id===operation)fail(e,id);})
@@ -388,10 +466,13 @@ function sense(now){
 
 const exposure=document.createElement('canvas');exposure.width=9;exposure.height=9;
 const exposureCtx=exposure.getContext('2d',{willReadFrequently:true});
-function light(media) {
+function light(media,rig) {
   if(!media)return;
   try{
-    exposureCtx.drawImage(media,0,0,9,9);
+    const [w,h]=mediaSize(media);
+    const anchor=rig?.screenCenter??rig?.faceCenter;
+    const x=anchor?clamp(anchor.x-.15,0,.70):.35, y=anchor?clamp(anchor.y-.035,0,.73):.34;
+    exposureCtx.drawImage(media,w*x,h*y,w*.30,h*.27,0,0,9,9);
     const data=exposureCtx.getImageData(0,0,9,9).data;
     let avg=0;
     for(let i=0;i<data.length;i+=4)avg+=data[i]*.25+data[i+1]*.61+data[i+2]*.14;
@@ -420,46 +501,82 @@ function scanPrompt(now){
 
 function resize(){
   bounds={w:stage.clientWidth,h:stage.clientHeight};
+  renderKey=null;
   if(gpu()&&bounds.w&&bounds.h)studio.resize(bounds.w,bounds.h,state.high);
 }
 new ResizeObserver(resize).observe(stage);
 resize();
+const statusLabels={locked:'اتصال برقرار',estimate:'برآورد بازهٔ بالاتنه',hold:'وقفهٔ کوتاه',none:'در انتظار نشانه‌ها'};
+const ms=(n)=>n==null?null:Math.round(n);
+let recentStats;
+function diagnostics(now,result){
+  const rig=result.rig;
+  const media=source(),[w,h]=mediaSize(media);
+  recentStats={version:3,source:state.source,frame:state.mode,status:result.status,
+    anchor:rig?.kind??null,trackingScore:rig?Math.round(rig.quality*100):null,
+    yaw:rig?Math.round(rig.yaw*180/Math.PI):null,arms:rig?.armQuality?.map(x=>x>=.55?'tracked':'estimated')??null,
+    mask:!!result.mask,maskAgeMs:result.mask&&state.source==='live'?ms(now-state.mask?.at):null,
+    delegate:state.delegate||null,thread:stage.dataset.vision??null,
+    dimensions:media?[w,h]:null,detectorMs:ms(state.poseMs),maskMs:ms(state.maskMs),
+    renderMs:ms(renderMs),fps,coverage:state.coverage,issue:state.issue||null};
+  if(!state.debug)return;
+  $('fit-health').textContent=state.source==='studio'?'مانکن':statusLabels[result.status];
+  $('fit-anchor').textContent=({face:'چشم‌ها و محور سر',body:'ژست بدن',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
+  $('fit-score').textContent=rig?show(recentStats.trackingScore):'—';
+  $('fit-yaw').textContent=rig?`${show(recentStats.yaw)}°`:'—';
+  $('fit-mask').textContent=result.mask?(state.source==='photo'?'آماده':`${show(recentStats.maskAgeMs)} ms`):'—';
+  $('fit-arms').textContent=rig?.armQuality?rig.armQuality.map(x=>x>=.55?'ردیابی‌شده':'تخمینی').join(' / '):'—';
+  $('fit-speed').textContent=state.delegate?`${state.delegate} / ${Math.round(state.poseMs)} ms`:'—';
+  $('fit-render').textContent=state.source==='live'?`${ms(renderMs)} ms / ${fps} FPS`:`${ms(renderMs)} ms`;
+  const issue=$('fit-issue');
+  const problem=state.issue?'یکی از اجزای تشخیص آماده نیست. برای جزئیات، گزارش را بگیر.':
+    state.item.source==='scan'?'مدل اسکن‌شده به نقاط مرجع بدن متصل می‌شود. حرکت آستین به مدل استخوان‌بندی‌شده نیاز دارد.':'';
+  issue.hidden=!problem;issue.textContent=problem;
+}
 function animate(now){
   requestAnimationFrame(animate);
-  if(!gpu()||document.hidden||!bounds.w||!bounds.h)return;
-  const dt=Math.max(.003,Math.min(.045,(now-prev)/1000));
-  prev=now;frame++;
-  if(state.source==='live'&&state.ready){
-    sense(now);
-    if(state.stamp&&now-state.stamp>730){
-      state.tracked=null;state.mask=null;smoothPose.clear();smoothFace.clear();
-    }
+  if(document.hidden||!bounds.w||!bounds.h)return;
+  const live=state.source==='live', demo=state.source==='studio';
+  if(!gpu()){
+    if(state.debug&&now-statsAt>=450){diagnostics(now,{status:'none',rig:null,mask:null});statsAt=now;}
+    return;
   }
-  const key=state.source==='studio'&&!state.move&&!state.wind
-    ? [display,studio.wear?.group.uuid,studio.avatar?.model.uuid,bounds.w,bounds.h,state.split,state.splitAt,state.turn,state.zoom,state.mode,state.high,state.debug].join('|')
-    : null;
-  if(key&&key===renderKey)return;
-  renderKey=key;
-  const media=source(), rect=sourceRect(media);
-  const rig=project();
-  if(state.source==='live'&&state.ready){
-    signal(rig?.kind==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب',rig?'ready':'pending');
-    if(!scanPrompt(now))guide(!rig?fitModes[state.mode].title : state.mode==='full'&&!rig.full?'برای حرکت دامن، پاها هم در قاب باشند.':null);
+  if(live&&state.ready)sense(now);
+  const result=fittedFrame(now), {rig,mask,alpha,status}=result;
+  stage.dataset.fit=status;
+  stage.dataset.matte=mask?'active':'off';
+  if(live&&state.ready){
+    const label=status==='hold'?'بازیابی ردیابی':status==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب';
+    signal(label,status==='locked'?'ready':'pending');
+    if(!scanPrompt(now))guide(status==='hold'?'چند لحظه صورت و شانه‌ها را در قاب نگه دار.':!rig?fitModes[state.mode].title:
+      state.mode==='full'&&!rig.full?'برای حرکت دامن، پاها هم در قاب باشند.':null);
   }
-  if(frame%15===0)light(media);
-  studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,lightValue:state.light,reduce});
-  studio.draw(state.split?state.splitAt/100:0);
-  layerFrame(ctx,studio,{
-    source:media,rect,mirror:state.source==='live'&&state.mirror,mode:state.mode,rig,
-    mask:state.occlusion?state.mask:null,debug:state.debug,
-    sleeve:['coat','jacket','knit'].includes(state.item.cut),
-  });
-  reportCount++;
-  if(now-metricsAt>1050){
-    $('telemetry').textContent=metricsAt?
-      (state.ready&&state.source!=='studio'?`${state.delegate} · ${Math.round(state.lastInfer)} ms`:`WEBGL · ${Math.round(reportCount*1000/(now-metricsAt))} FPS`):'';
+  if(now-metricsAt>=1000){
+    fps=metricsAt?Math.round(reportCount*1000/(now-metricsAt)):0;
+    const perf=state.delegate&&state.ready&&!demo?`${state.delegate} · ${Math.round(state.lastInfer)} ms`:state.move&&demo&&fps?`WEBGL · ${fps} FPS`:'';
+    if($('telemetry').textContent!==perf)$('telemetry').textContent=perf;
     metricsAt=now;reportCount=0;
   }
+  if(now-statsAt>=420){diagnostics(now,result);statsAt=now;}
+  if(live&&now-lastPaint<1000/(state.high?42:35))return;
+  const adjustment=state.alignment[state.mode];
+  const key=!live&&(demo?!state.move&&!state.wind:!state.wind)
+    ? [display,studio.wear?.group.uuid,studio.avatar?.model.uuid,bounds.w,bounds.h,state.source,rigRevision,
+      state.split,state.splitAt,state.turn,state.zoom,state.mode,state.high,state.debug,state.coverage,state.occlusion,...Object.values(adjustment)].join('|')
+    : null;
+  if(key&&key===renderKey)return;
+  renderKey=key;lastPaint=now;
+  const dt=Math.max(.003,Math.min(.045,(now-prev)/1000));
+  prev=now;frame++;
+  const media=source(), rect=sourceRect(media);
+  if(media&&(!live||frame%12===1))light(media,rig);
+  const started=performance.now();
+  studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,lightValue:state.light,reduce,adjustment});
+  studio.draw(state.split?state.splitAt/100:0);
+  if(!demo)compositor.draw(ctx,studio,{rect,mirror:mirrored(),mask,rig,alpha,debug:state.debug,cut:state.item.cut,
+    tailored:state.item.cut==='coat'||state.item.cut==='jacket'&&state.item.id!=='orion',coverage:state.coverage,occlusion:state.occlusion});
+  renderMs=renderMs*.65+(performance.now()-started)*.35;
+  reportCount++;
 }
 requestAnimationFrame(animate);
 
@@ -476,14 +593,27 @@ $('capture').addEventListener('click',()=>{
   bg.addColorStop(0,'#7d6c5c');bg.addColorStop(1,'#352921');
   g.fillStyle=bg;g.fillRect(0,0,bounds.w,bounds.h);
   const media=source();
-  if(media)drawMedia(g,media,sourceRect(media),state.source==='live'&&state.mirror);
-  if(gpu()&&studio.draw(state.split?state.splitAt/100:0)){
-    g.drawImage(canvas,0,0,bounds.w,bounds.h);g.drawImage(ctx.canvas,0,0,bounds.w,bounds.h);
-  } else if(state.source==='studio'&&$('poster').complete&&$('poster').naturalWidth){
-    const p=$('poster');drawMedia(g,p,contain(p.naturalWidth,p.naturalHeight,bounds.w,bounds.h),false);
+  if(media)drawMedia(g,media,sourceRect(media),mirrored());
+  if(state.source==='studio'){
+    if(gpu()&&studio.draw(state.split?state.splitAt/100:0))g.drawImage(canvas,0,0,bounds.w,bounds.h);
+    else if($('poster').complete&&$('poster').naturalWidth){
+      const p=$('poster');drawMedia(g,p,contain(p.naturalWidth,p.naturalHeight,bounds.w,bounds.h),false);
+    }
+  }else if(gpu()){
+    g.drawImage(ctx.canvas,0,0,bounds.w,bounds.h);
   }
   const id=state.size.sku;
   shot.toBlob((b)=>{if(b){download(b,`VFR-${id}.png`);toast('عکس آینه ذخیره شد.');}},'image/png');
+});
+
+$('freeze').addEventListener('click',()=>{
+  if(state.source!=='live'||!source())return;
+  const id=operation;
+  const still=document.createElement('canvas'), scale=Math.min(1,1280/video.videoWidth);
+  still.width=Math.max(1,Math.round(video.videoWidth*scale));
+  still.height=Math.max(1,Math.round(video.videoHeight*scale));
+  drawMedia(still.getContext('2d'),video,{x:0,y:0,w:still.width,h:still.height},mirrored());
+  still.toBlob(blob=>{if(blob)loadPhoto(blob,id);},'image/jpeg',.93);
 });
 
 $$('button[data-source]').forEach(b=>b.addEventListener('click',()=>{
@@ -504,9 +634,49 @@ $('compare').addEventListener('click',()=>{state.split=state.split?0:1;controls(
 $('split-slider').addEventListener('input',e=>{state.splitAt=Number(e.currentTarget.value);controls();});
 $('quality').addEventListener('change',e=>{state.high=e.currentTarget.value==='high';resize();});
 $('zoom').addEventListener('input',e=>{state.zoom=Number(e.currentTarget.value)/100;});
-for(const id of ['mirror','occlusion','debug']){
-  $(id).addEventListener('change',(e)=>{state[id]=e.currentTarget.checked;if(id==='mirror')video.classList.toggle('is-mirror',state.mirror);});
+$('response').addEventListener('change',e=>{state.response=e.currentTarget.value;});
+$('camera-facing').addEventListener('change',e=>{
+  state.camera=e.currentTarget.value;
+  state.mirror=state.camera==='user';$('mirror').checked=state.mirror;
+  if(state.source==='live')changeSource('live');
+});
+$('mirror').addEventListener('change',e=>{
+  state.mirror=e.currentTarget.checked;stable=null;video.classList.toggle('is-mirror',mirrored());
+});
+function refreshPhotoMask(){
+  if(semantic()&&state.source==='photo'&&photoURL&&!state.mask&&!state.busy)analyzePhoto(operation);
 }
+$('occlusion').addEventListener('change',e=>{state.occlusion=e.currentTarget.checked;refreshPhotoMask();});
+$('coverage').addEventListener('change',e=>{state.coverage=e.currentTarget.value;refreshPhotoMask();});
+function setDebug(enabled){
+  state.debug=enabled;$('debug').checked=enabled;
+  controls();statsAt=0;
+  if(enabled)diagnostics(performance.now(),gpu()?fittedFrame(performance.now()):{status:'none'});
+}
+$('debug').addEventListener('change',e=>setDebug(e.currentTarget.checked));
+$('inspect').addEventListener('click',()=>setDebug(!state.debug));
+$('export-diagnostics').addEventListener('click',()=>{
+  const now=performance.now();diagnostics(now,gpu()?fittedFrame(now):{status:'none'});
+  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v3-diagnostics.json');
+});
+const alignmentInputs=$$('[data-align]');
+function syncAlignment(){
+  for(const input of alignmentInputs){
+    const key=input.dataset.align;
+    input.value=state.alignment[state.mode][key];
+    $(`value-${key}`).textContent=`${show(Number(input.value))}٪`;
+  }
+}
+for(const input of alignmentInputs) input.addEventListener('input',()=>{
+  const key=input.dataset.align;
+  state.alignment[state.mode][key]=Number(input.value);
+  $(`value-${key}`).textContent=`${show(Number(input.value))}٪`;
+});
+$('align-reset').addEventListener('click',()=>{
+  state.alignment[state.mode]=emptyAlignment();$('coverage').value='balanced';state.coverage='balanced';
+  syncAlignment();refreshPhotoMask();
+});
+$('alignment-dialog').addEventListener('keydown',e=>{if(e.key==='Escape')$('alignment-dialog').close();});
 $('form-select').replaceChildren(...forms.map(f=>new Option(f.label,f.id,false,state.formId===f.id)));
 $('form-select').addEventListener('change',e=>{state.formId=e.currentTarget.value;state.formPinned=true;updateLook(true);});
 $('apply-profile').addEventListener('change',e=>{state.apply=e.currentTarget.checked;updateLook(true);});
@@ -643,6 +813,11 @@ $('add-cart').addEventListener('click',()=>{
 });
 $('export-cart').addEventListener('click',()=>download(new Blob([JSON.stringify(makeOrder(state.cart),null,2)],{type:'application/json'}),'VFR-order-draft.json'));
 function open(id){
+  if(id==='alignment-dialog'){
+    syncAlignment();
+    if($(id).open)$(id).close();else $(id).show();
+    return;
+  }
   if(id==='fit-dialog')fillMeasurements();
   if(id==='size-dialog')chart();
   if(id==='cart-dialog')cart();
@@ -651,7 +826,7 @@ function open(id){
 }
 $$('[data-open]').forEach(b=>b.addEventListener('click',()=>open(b.dataset.open)));
 $$('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
-for(const d of $$('dialog'))d.addEventListener('click',(e)=>{
+for(const d of $$('dialog:not(#alignment-dialog)'))d.addEventListener('click',(e)=>{
   if(e.target!==d)return;
   const b=d.getBoundingClientRect();
   if(e.clientX<b.left||e.clientX>b.right||e.clientY<b.top||e.clientY>b.bottom)d.close();

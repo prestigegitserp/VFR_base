@@ -155,14 +155,21 @@ export function readBodyScan(data) {
   return { method: 'scan', measures };
 }
 
-let database;
-function connection() {
-  database ??= new Promise((resolve, reject) => {
-    const request = indexedDB.open('vfr-atelier-2', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('garments', { keyPath: 'id' });
+function openGarments(name, create) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name);
+    request.onupgradeneeded = () => {
+      if(create)request.result.createObjectStore('garments', {keyPath:'id'});
+      else request.transaction.abort();
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+let database;
+function connection() {
+  database ??= openGarments('vfr-atelier-3',true).catch(e=>{database=null;throw e;});
   return database;
 }
 
@@ -177,11 +184,16 @@ export async function storePackage(record) {
   });
 }
 
-export async function listPackages() {
-  const db = await connection();
+function readPackages(db) {
   return new Promise((resolve, reject) => {
     const q = db.transaction('garments').objectStore('garments').getAll();
     q.onsuccess = () => resolve(q.result);
     q.onerror = () => reject(q.error);
   });
+}
+
+export async function listPackages() {
+  const previous=await openGarments('vfr-atelier-2',false).then(db=>readPackages(db).finally(()=>db.close())).catch(()=>[]);
+  const current=await connection().then(readPackages).catch(()=>[]);
+  return [...new Map([...previous,...current].map(record=>[record.id,record])).values()];
 }

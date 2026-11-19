@@ -60,32 +60,38 @@ export class VisionCore {
     const key=mode==='face'?'face':'pose';
     const primary=await this.task(key,method);
     const run=(k)=>(method==='VIDEO'?k.detectForVideo(image,time):k.detect(image));
-    let pose=null, face=null, matrix=null, mask=null, underlyingError=null;
+    let pose=null, world=null, face=null, matrix=null, mask=null, underlyingError=null;
     if(key==='pose'){
       const output=run(primary.task);
       pose=output.landmarks[0]??null;
+      world=output.worldLandmarks[0]??null;
       output.close();
     }else{
       const output=run(primary.task);
       face=output.faceLandmarks[0]??null;
       matrix=output.facialTransformationMatrixes?.[0]?.data??null;
     }
-    const missingShoulders = !pose?.[11] || (pose[11].visibility??0)<.48 || (pose[12].visibility??0)<.48;
+    const upperShoulders=pose?.slice(11,13);
+    const missingShoulders = !upperShoulders?.length || upperShoulders.some(p => (p.visibility??0)<.52 || p.y>.99 || p.x<0 || p.x>1);
     if(mode==='upper' && fallback && missingShoulders){
       try{
         const detector=await this.task('face',method);
         face=run(detector.task).faceLandmarks[0]??null;
       }catch(e){underlyingError=e.message;}
     }
-    if(masks){
+    const poseMs=performance.now()-now;
+    let maskMs=0;
+    if(masks || mode==='upper'&&fallback&&missingShoulders){
+      const started=performance.now();
       try{
         const s=(await this.task('mask',method)).task;
         const copy=(result)=>{ if(result.categoryMask)mask=smallMask(result.categoryMask); };
         if(method==='VIDEO')s.segmentForVideo(image,time,copy);
         else s.segment(image,copy);
       }catch(e){underlyingError=e.message;}
+      maskMs=performance.now()-started;
     }
-    return {pose,face,matrix,mask,delegate:primary.delegate,timeMs:performance.now()-now,underlyingError};
+    return {pose,world,face,matrix,mask,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
   }
   close() {
     for(const p of this.model.values())p.then(({task})=>task.close()).catch(()=>{});

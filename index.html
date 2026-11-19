@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f0e9">
-  <meta name="description" content="آتلیهٔ پرو مجازی VFR، از صورت تا تمام‌قد، با جدول تناسب اندازه و ورود فایل سه‌بعدی لباس.">
-  <title>VFR Atelier — اتاق پرو و اندازه‌گذاری</title>
+  <meta name="description" content="آتلیهٔ پرو مجازی VFR، با اتصال لباس سه‌بعدی به مفاصل بدن، تنظیم تن‌خور و پرو روی دوربین و عکس.">
+  <title>VFR Atelier v3 · اتاق پرو سه‌بعدی</title>
   <link rel="icon" href="./mark.svg" type="image/svg+xml">
   <script type="module" src="/src/main.js"></script>
 </head>
@@ -17,14 +17,14 @@
         <a href="#wardrobe">کمد لباس</a>
         <button class="nav-button" type="button" data-open="import-dialog"><i data-icon="upload"></i> ورود اسکن</button>
         <button class="nav-button" type="button" data-open="cart-dialog"><i data-icon="bag"></i> <span>سفارش</span> <b id="cart-count" hidden>۰</b></button>
-        <a class="old-version" href="../v1/" aria-label="مشاهده نسخه ۱" dir="ltr">v1</a>
+        <a class="old-version" href="../v2/" aria-label="مشاهده نسخه ۲" dir="ltr">v2</a>
       </nav>
     </div>
   </header>
 
   <main class="page">
     <div class="intro">
-      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>لباس را در قاب درست امتحان کن و اندازهٔ آن را با اندازه‌های خودت بسنج.</p></div>
+      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>لباس را در قاب دوربین پرو کن، اتصالش به بدن را تنظیم کن و تفاوت سایزها را بسنج.</p></div>
       <button type="button" class="outline intro-fit" data-open="fit-dialog"><i data-icon="ruler"></i> پروفایل اندازه</button>
     </div>
     <div class="workspace">
@@ -66,8 +66,27 @@
             <button type="button" class="icon-btn pill" id="wind" aria-label="باد روی پارچه" title="باد روی پارچه" aria-pressed="false"><i data-icon="wind"></i></button>
             <button type="button" class="icon-btn pill" id="compare" aria-label="مقایسه قبل و بعد" title="مقایسه قبل و بعد" aria-pressed="false"><i data-icon="split"></i></button>
             <button type="button" class="icon-btn pill" id="capture" aria-label="ذخیره عکس" title="ذخیره عکس"><i data-icon="camera"></i></button>
+            <button type="button" class="icon-btn pill" id="freeze" aria-label="ثابت‌کردن فریم دوربین" title="ثابت‌کردن فریم دوربین" hidden><i data-icon="freeze"></i></button>
+          </div>
+          <div class="fit-tools">
+            <button type="button" class="text-tool" id="adjust-fit" data-open="alignment-dialog" aria-label="تنظیم تن‌خور" title="تنظیم تن‌خور" hidden><i data-icon="crop"></i><span>تنظیم تن‌خور</span></button>
+            <button type="button" class="text-tool" id="inspect" aria-label="عیب‌یابی ردیابی" title="عیب‌یابی ردیابی" aria-pressed="false" aria-controls="inspector"><i data-icon="motion"></i><span>عیب‌یابی</span></button>
           </div>
         </div>
+        <section class="inspector" id="inspector" aria-labelledby="inspector-title" hidden>
+          <div class="inspector-head"><h2 id="inspector-title">عیب‌یابی آینه</h2><button type="button" id="export-diagnostics" class="text-tool">گزارش فنی</button></div>
+          <dl>
+            <div><dt>اتصال</dt><dd id="fit-health">—</dd></div>
+            <div><dt>نقاط مرجع</dt><dd id="fit-anchor">—</dd></div>
+            <div><dt>امتیاز تشخیص</dt><dd id="fit-score">—</dd></div>
+            <div><dt>زاویهٔ بدن یا سر</dt><dd id="fit-yaw" dir="ltr">—</dd></div>
+            <div><dt>ماسک بدن</dt><dd id="fit-mask">—</dd></div>
+            <div><dt>آستین‌ها</dt><dd id="fit-arms">—</dd></div>
+            <div><dt>زمان تشخیص</dt><dd id="fit-speed" dir="ltr">—</dd></div>
+            <div><dt>رندر</dt><dd id="fit-render" dir="ltr">—</dd></div>
+          </dl>
+          <p id="fit-issue" hidden></p>
+        </section>
       </section>
 
       <aside class="wardrobe" id="wardrobe" aria-label="کمد لباس" dir="rtl">
@@ -104,7 +123,7 @@
     </div>
     <footer class="foot">
       <span><i data-icon="shield"></i> تصویر و اندازه‌ها روی دستگاهت پردازش می‌شوند</span>
-      <a href="https://github.com/prestigegitserp/VFR_base/tree/v2" rel="noopener" target="_blank">کد و پروتکل</a>
+      <a href="https://github.com/prestigegitserp/VFR_base/tree/v3" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۳</a>
     </footer>
   </main>
 
@@ -157,11 +176,25 @@
       <label>فرم مرجع مانکن <select id="form-select"></select></label>
       <label>از اندازه‌های من برای مانکن استفاده کن <input id="apply-profile" type="checkbox"></label>
       <label>کیفیت رندر <select id="quality"><option value="balanced">متعادل</option><option value="high">جزئیات بالا</option></select></label>
+      <label>پاسخ ردیابی <select id="response"><option value="steady">ملایم و پایدار</option><option value="fast">سریع‌تر</option></select></label>
+      <label>دوربین <select id="camera-facing"><option value="user">جلو</option><option value="environment">پشت، در صورت وجود</option></select></label>
       <label>نمای آینه‌ای دوربین <input id="mirror" type="checkbox" checked></label>
       <label>پوشاندن لباس با مو و دست <input id="occlusion" type="checkbox" checked></label>
       <label>نمای نقاط تشخیص <input id="debug" type="checkbox"></label>
       <label>بزرگ‌نمایی مانکن <input id="zoom" type="range" min="100" max="145" value="100"></label>
     </div>
+  </dialog>
+
+  <dialog id="alignment-dialog" aria-labelledby="alignment-title">
+    <div class="dialog-head"><div><h2 id="alignment-title">تنظیم تن‌خور تصویر</h2><p>لغزنده‌ها روی همین قاب اثر دارند.</p></div><button type="button" data-close class="icon-btn" aria-label="بستن"><i data-icon="close"></i></button></div>
+    <div class="settings alignment">
+      <label>آزادی دور سیلوئت <select id="coverage"><option value="fitted">نزدیک به بدن</option><option value="balanced">طبیعی</option><option value="drape">آزادتر</option><option value="off">بدون محدودیت سیلوئت</option></select></label>
+      <label for="align-x"><span>جابجایی افقی</span><input id="align-x" data-align="x" type="range" min="-12" max="12" value="0" dir="ltr"><output for="align-x" id="value-x" dir="ltr">۰٪</output></label>
+      <label for="align-y"><span>جابجایی عمودی</span><input id="align-y" data-align="y" type="range" min="-12" max="12" value="0" dir="ltr"><output for="align-y" id="value-y" dir="ltr">۰٪</output></label>
+      <label for="align-width"><span>عرض</span><input id="align-width" data-align="width" type="range" min="-23" max="23" value="0" dir="ltr"><output for="align-width" id="value-width" dir="ltr">۰٪</output></label>
+      <label for="align-length"><span>طول</span><input id="align-length" data-align="length" type="range" min="-23" max="23" value="0" dir="ltr"><output for="align-length" id="value-length" dir="ltr">۰٪</output></label>
+    </div>
+    <div class="dialog-actions"><button type="button" id="align-reset" class="outline">بازنشانی این قاب</button><button type="button" data-close class="primary">بازگشت به آینه</button></div>
   </dialog>
 
   <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp,image/avif" hidden>

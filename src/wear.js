@@ -1,6 +1,7 @@
 import * as T from 'three';
 import { clamp, fabrics } from './catalog.js';
 import { Cloth } from './cloth.js';
+import { drapePoint, fitMeshes } from './fit.js';
 
 const tau = Math.PI * 2;
 const V = (x=0,y=0,z=0) => new T.Vector3(x,y,z);
@@ -124,7 +125,7 @@ export function makeWear(item, size, color, torso=.45) {
     const sa=Math.sin(a),ca=Math.cos(a), front=Math.max(0,ca);
     const fold=(Math.sin(a*(dress?6:13)+t*(dress?12:19))*.0042+Math.cos(a*21+t*14)*.0013)
       *Math.sin(t*Math.PI)*(.6+description.softness*.8);
-    const y0=dress? -.095 - .043*front + .014*sa*sa : .040 - front**6*(tailored?.105:knit?.035:.023);
+    const y0=dress ? -.095 - .043*front + .014*sa*sa : .014 + .014*sa*sa - front**3*(tailored?.069:knit?.033:.029);
     return [sa*(mix(x0,x1,b)+fold+offset-(dress&&t<.15?.033*(1-t/.15):0)),
       y0*(1-t)+bottom*t,
       ca*(mix(z0,z1,b)+fold*.53+offset) + centerZ + .005*Math.sin(2*t*Math.PI)];
@@ -132,6 +133,7 @@ export function makeWear(item, size, color, torso=.45) {
   const at=(a,t,o=.003)=>V(...bodyAt(a,t,o));
   const track=(a,b,u,v,n=18)=>Array.from({length:n},(_,i)=>{const t=i/(n-1);return at(mix(a,b,t),mix(u,v,t));});
   const circle = (fn,n=64)=>Array.from({length:n},(_,i)=>fn(i*tau/n));
+  let underlayer;
   if (!skirt) {
     mesh(group,grid(100,46,bodyAt),m.main,'Shaped fabric panels');
     if (dress) {
@@ -143,9 +145,9 @@ export function makeWear(item, size, color, torso=.45) {
       const cap = (a,t) => {
         const [x,y,z]=bodyAt(a,0);
         const front=Math.max(0,Math.cos(a));
-        const neckX=(knit?.089:.083)*Math.sin(a), neckZ=(knit?.074:.086)*Math.cos(a)+centerZ*.76;
-        const neckY=(zipped?.050:.049)-front**5*(tailored?.116:knit?.047:.041);
-        return [mix(x,neckX,t),mix(y,neckY,t)+.013*Math.sin(t*Math.PI)*Math.abs(Math.sin(a)),mix(z,neckZ,t)];
+        const neckX=(knit?.083:.080)*Math.sin(a), neckZ=(knit?.067:.077)*Math.cos(a)+centerZ*.62;
+        const neckY=.039-front**(tailored?2.5:4)*(tailored?.135:knit?.056:.055);
+        return [mix(x,neckX,t),mix(y,neckY,t)+.007*Math.sin(t*Math.PI)*Math.abs(Math.sin(a)),mix(z,neckZ,t)];
       };
       mesh(group,grid(72,13,cap),m.main,'Shoulder and collar opening');
       tube(group,m.lapel,circle(a=>V(...cap(a,1))),zipped?.009:knit?.006:.003,'Collar binding',true);
@@ -153,15 +155,15 @@ export function makeWear(item, size, color, torso=.45) {
     for(const a of [-1.57,1.57,Math.PI]) tube(group,m.lapel,track(a-.04,a,.19,.993),.0018,'Seam topstitch');
   }
   if(tailored) {
-    mesh(group,grid(26,20,(u,t)=>{
+    underlayer=mesh(group,grid(26,20,(u,t)=>{
       const x=(u-.5)*2;
-      return [x*mix(.112,.060,t),.056-t*.199-.011*x*x,
+      return [x*mix(.104,.063,t),.027-t*.199-.011*x*x,
         centerZ+.091+.035*Math.sin(t*Math.PI/2)-.027*x*x];
     },false),m.dark,'Knit underlayer');
     for(const s of [-1,1]) {
       const scale=shoulder/.214;
-      const neck = [[.068,.014,.079],[.139,-.059,.111],[.093,-.127,.138],[.106,-.104,.144],
-        [.029,-.211,.146],[.014,-.206,.138]].map(([x,y,z])=>[x*s*scale,y,z*(c[1]/.121)+centerZ]);
+      const neck = [[.075,.019,.070],[.128,-.046,.109],[.086,-.116,.133],[.102,-.099,.140],
+        [.031,-.196,.146],[.014,-.191,.138]].map(([x,y,z])=>[x*s*scale,y,z*(c[1]/.121)+centerZ]);
       panel(group,m.lapel,neck,[0,1,3,1,2,3,0,3,5,3,4,5],'Notched lapel');
       tube(group,m.edge,neck.slice(0,5).map(([x,y,z])=>V(x,y,z+.0009)),.00135,'Lapel pick stitch');
       tube(group,m.lapel,track(s*.56,s*1.21,.81,.75),.0085,'Welt pocket');
@@ -215,6 +217,7 @@ export function makeWear(item, size, color, torso=.45) {
       tube(group,m.edge,circle(a=>V(Math.sin(a)*(w[0]+.005),rise-.021,Math.cos(a)*(w[1]+.004))),.0012,'Waist topstitch',true);
     }
   }
+  const shapeTorso=fitMeshes(group,skirtMesh);
   const armParts=[];
   if(sleeves) for(const side of [-1,1]){
     const shell=mesh(group,grid(36,30,()=>[0,0,0]),m.main,'Fitted sleeve');
@@ -222,48 +225,65 @@ export function makeWear(item, size, color, torso=.45) {
     shell.frustumCulled=cuff.frustumCulled=false;
     armParts.push({side,shell,cuff});
   }
-  function shapeArm(part, joint, high, low, rows, s, edge) {
+  function shapeArm(part, joint, high, low, rows, s, edge, onBody) {
     const [sh,el,wr]=joint;
-    const start=V(s*shoulder*.84, sh.y+.043, sh.z+.013);
+    const start=onBody ? sh.clone().add(V(-s*.022,.023,.005)) : V(s*shoulder*.87,sh.y+.028,sh.z+.010);
     const end=wr.clone();
     const expected=Math.max(.40,(r.sleeve??590)*.001), arm=sh.distanceTo(el)+el.distanceTo(wr);
-    end.addScaledVector(wr.clone().sub(el).normalize(), clamp(expected-arm,-.095,.086));
-    const spline=new T.CatmullRomCurve3([start, sh.clone().lerp(el,.36),el,end]);
+    const forearm=wr.clone().sub(el).normalize();
+    const hem=onBody ? clamp((expected-arm)*.26,-.034,.019) : clamp(expected-arm,-.091,.079);
+    end.addScaledVector(forearm, hem);
+    const spline=new T.CatmullRomCurve3([start, sh.clone().lerp(el,.27),el,end]);
     const attr=part.geometry.attributes.position;
+    const pos=V(), tangent=V(), side=V(), front=V(), normal=V(0,0,1);
     for(let j=0;j<=rows;j++){
       const t=mix(low,high,j/rows);
-      const pos=spline.getPoint(t), tangent=spline.getTangent(t);
-      pos.z+=.011*Math.sin(Math.PI*t);
-      const side=tangent.clone().cross(V(0,0,1)).normalize();
-      const front=side.clone().cross(tangent).normalize();
-      const crown=.54+.46*Math.sin(Math.PI/2*clamp(t/.20,0,1));
-      const radius=(.078+(coat?.009:knit?.005:.008))*(1-.48*t)*crown +.005*Math.sin(Math.PI*t);
+      spline.getPoint(t,pos);spline.getTangent(t,tangent);
+      pos.z+=.004*Math.sin(Math.PI*t);
+      front.copy(normal).addScaledVector(tangent,-normal.dot(tangent));
+      if(front.lengthSq()<.002)front.set(0,1,0).addScaledVector(tangent,-tangent.y);
+      front.normalize();normal.copy(front);
+      side.crossVectors(tangent,front).normalize();
+      const crown=.70+.30*Math.sin(Math.PI/2*clamp(t/.17,0,1));
+      const radius=(.062+(coat?.013:knit?.004:.009))*(1-.42*t)*crown+.004*Math.sin(Math.PI*t);
       for(let i=0;i<=36;i++){
         const a=i*tau/36, ripple=.0034*Math.sin(a*6+t*28)*Math.sin(Math.PI*t)**2 + .0012*Math.sin(a*17-t*46);
         const r=radius+ripple+(edge?.001+.0014*Math.cos(a*18):0);
-        const p=pos.clone().addScaledVector(side,Math.sin(a)*r).addScaledVector(front,Math.cos(a)*r*.88);
-        attr.setXYZ(j*37+i,p.x,p.y,p.z);
+        const x=Math.sin(a)*r, z=Math.cos(a)*r*.88;
+        attr.setXYZ(j*37+i,pos.x+side.x*x+front.x*z,pos.y+side.y*x+front.y*z,pos.z+side.z*x+front.z*z);
       }
     }
     attr.needsUpdate=true;
     part.geometry.computeVertexNormals();
   }
-  function update(arms,legs,dt,drive) {
-    armParts.forEach(({side,shell,cuff},i)=>{
-      shapeArm(shell,arms[i],1,0,30,side,false);
-      shapeArm(cuff,arms[i],1,.924,5,side,true);
-    });
-    if (sim?.advance(dt,drive,legs)){
+  let lastFit=null;
+  function update(arms,legs,dt,drive,fit=null,articulate=true) {
+    const newFit=lastFit!==fit;
+    shapeTorso(fit);
+    lastFit=fit;
+    if(underlayer)underlayer.visible=!fit;
+    if(articulate) {
+      armParts.forEach(({side,shell,cuff},i)=>{
+        shapeArm(shell,arms[i],1,0,30,side,false,Boolean(fit));
+        shapeArm(cuff,arms[i],1,.924,5,side,true,Boolean(fit));
+      });
+    }
+    if (sim && (sim.advance(dt,drive,legs)||newFit)){
       const { pos, columns:n, rows:count }=sim;
       const a=skirtMesh.geometry.attributes.position;
       for(let i=0;i<count;i++){
-        a.array.set(pos.subarray(i*n*3,(i+1)*n*3),i*(n+1)*3);
-        a.array.set(pos.subarray(i*n*3,i*n*3+3),(i*(n+1)+n)*3);
+        for(let col=0;col<=n;col++){
+          const start=(i*n+col%n)*3;
+          const at=i*(n+1)+col;
+          if(fit)drapePoint(pos[start],pos[start+1],pos[start+2],fit,a.array,at*3);
+          else a.setXYZ(at,pos[start],pos[start+1],pos[start+2]);
+        }
       }
       a.needsUpdate=true;skirtMesh.geometry.computeVertexNormals();
     }
   }
-  return { group, update, reset(){sim?.reset();}, dispose:()=>dispose(group,new Set(Object.values(m))) };
+  return { group, update, fit:{ shoulder:shoulder*2, neck:.037, torso,
+    chest:c[0]*2, waist:w[0]*2, hip:h[0]*2 }, reset(){sim?.reset();}, dispose:()=>dispose(group,new Set(Object.values(m))) };
 }
 
 function glasses(item,size,color) {

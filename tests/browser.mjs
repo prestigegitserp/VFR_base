@@ -23,7 +23,7 @@ const headers={'.html':'text/html','.js':'text/javascript','.css':'text/css','.j
   '.wasm':'application/wasm','.webp':'image/webp','.woff2':'font/woff2','.svg':'image/svg+xml'};
 const server=createServer(async(req,res)=>{
   try{
-    const relative=new URL(req.url,'http://localhost').pathname.replace(/^\/VFR_base\/v2\//,'');
+    const relative=new URL(req.url,'http://localhost').pathname.replace(/^\/VFR_base\/v3\//,'');
     const path=resolve(root,relative||'index.html');
     if(!path.startsWith(root+'/')||!(await stat(path)).isFile())throw new Error('not found');
     res.writeHead(200,{'content-type':headers[extname(path)]??'application/octet-stream'});
@@ -31,10 +31,10 @@ const server=createServer(async(req,res)=>{
   }catch{res.writeHead(404).end();}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v2/';
+const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v3/';
 let instance;
 try{
-  instance=await chromium.launch({headless:true,args:[
+  instance=await chromium.launch({headless:true,executablePath:process.env.VFR_CHROMIUM,args:[
     '--enable-unsafe-swiftshader','--use-angle=swiftshader','--use-fake-device-for-media-stream',
     '--use-fake-ui-for-media-stream','--use-file-for-fake-video-capture='+video,
   ]});
@@ -92,16 +92,58 @@ try{
       throw new Error(`Expected ${label}; saw ${status}: ${message}; errors: ${errors.join(' / ')}`,{cause:e});
     }
   }
+  async function overlay(){
+    return page.locator('#foreground').evaluate(canvas=>{
+      const {width,height}=canvas;
+      const pixels=canvas.getContext('2d').getImageData(0,0,width,height).data;
+      let count=0,x=0,minX=width,maxX=0,minY=height,maxY=0;
+      for(let y=0;y<height;y+=3)for(let column=0;column<width;column+=3){
+        if(pixels[(y*width+column)*4+3]<122)continue;
+        count++;x+=column;
+        minX=Math.min(minX,column);maxX=Math.max(maxX,column);
+        minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+      }
+      return {count,center:count?x/count:0,x:minX,w:maxX-minX,y:minY,h:maxY-minY};
+    });
+  }
   await page.locator('button[data-frame=full]').click();
   await page.locator('button[data-source=photo]').click();
   await page.locator('#photo-file').setInputFiles(photo);
   await expectSignal('پرو روی عکس');
   assert.equal(await page.locator('#stage').getAttribute('data-mask'),'ready');
+  await page.locator('#stage[data-matte=active][data-fit=locked]').waitFor();
+  assert.ok((await overlay()).count>160);
   console.log('OK: full-body pose and multiclass foreground mask');
   await page.locator('button[data-frame=upper]').click();
   await page.locator('#photo-file').setInputFiles(upper);
   await expectSignal('پرو روی عکس');
-  console.log('OK: cropped upper-body photo');
+  await page.locator('#stage[data-matte=active]').waitFor();
+  const initial=await overlay();
+  assert.ok(initial.count>220 && initial.h>50,JSON.stringify(initial));
+  if(process.env.VFR_BROWSER_SHOTS)await page.screenshot({path:'.render/pro-upper.jpg',type:'jpeg',quality:86});
+  await page.locator('#adjust-fit').click();
+  await page.locator('#coverage').selectOption('off');
+  await page.locator('#align-x').focus();
+  await page.locator('#align-x').press('End');
+  await page.locator('#alignment-dialog [data-close]').first().click();
+  const adjusted=await overlay();
+  assert.ok(adjusted.center>initial.center+8,JSON.stringify({initial,adjusted}));
+  await page.locator('#adjust-fit').click();
+  await page.locator('#align-reset').click();
+  assert.equal(await page.locator('#align-x').inputValue(),'0');
+  assert.equal(await page.locator('#coverage').inputValue(),'balanced');
+  await page.locator('#alignment-dialog [data-close]').first().click();
+  await page.locator('#inspect').click();
+  await page.locator('#inspector').waitFor();
+  const capturedReport=page.waitForEvent('download');
+  await page.locator('#export-diagnostics').click();
+  const report=await capturedReport;
+  assert.equal(report.suggestedFilename(),'VFR-v3-diagnostics.json');
+  const diag=JSON.parse(await readFile(await report.path(),'utf8'));
+  assert.ok(diag.mask && diag.source==='photo' && diag.trackingScore>=50);
+  assert.ok(!JSON.stringify(diag).includes('landmarks') && !('photo' in diag));
+  await page.locator('#inspect').click();
+  console.log('OK: cropped photo has fitted pixels, alignment and mask controls, sanitized diagnostics',initial,adjusted);
   await page.locator('button[data-frame=face]').click();
   await page.locator('#photo-file').setInputFiles(portrait);
   await expectSignal('پرو روی عکس');
@@ -110,9 +152,22 @@ try{
   await page.locator('button[data-frame=full]').click();
   await page.locator('button[data-source=live]').click();
   await expectSignal('ردیابی بدن');
+  await page.locator('#stage[data-matte=active]').waitFor();
+  const seen=[];
+  for(let i=0;i<9;i++){
+    const picture=await overlay();
+    if(picture.count>160)seen.push(picture.center);
+    if(seen.length>1 && Math.max(...seen)-Math.min(...seen)>8)break;
+    await new Promise(resolve=>setTimeout(resolve,160));
+  }
+  assert.ok(seen.length>1&&Math.max(...seen)-Math.min(...seen)>8,JSON.stringify(seen));
+  await page.locator('#freeze').click();
+  await page.locator('#stage[data-source=photo]').waitFor();
+  await expectSignal('پرو روی عکس');
+  assert.equal(await page.locator('#video').evaluate(v=>!!v.srcObject),false);
   await page.locator('button[data-source=studio]').click();
   assert.equal(await page.locator('#video').evaluate(v=>!!v.srcObject),false);
-  console.log('OK: actual MediaPipe inference on getUserMedia test stream, track ends on exit');
+  console.log('OK: garment follows a moving getUserMedia stream, freeze switches to photo and stops the camera');
   const mobile=await instance.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'});
   await mobile.goto(url);
   await mobile.locator('.look').first().waitFor();
