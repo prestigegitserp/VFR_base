@@ -1,0 +1,58 @@
+name: Deploy VFR Studio to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/pages.yml']
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Validate VFR Studio]
+    branches: [v1]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vfr-github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'refs/heads/v1' }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run stage:models
+      - run: npm run build
+      - name: Record source revision
+        run: git rev-parse HEAD > dist/source-commit.txt
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deploy
