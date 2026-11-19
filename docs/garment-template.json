@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "پیراهن سفارشی",
+  "cut": "luna",
+  "fabric": "satin",
+  "color": "#5f354d",
+  "chest": 98,
+  "waist": 80,
+  "hips": 107,
+  "length": 124
+}

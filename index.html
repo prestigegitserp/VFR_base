@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="اتاق پرو مجازی VFR Studio با دوربین معمولی، لباس‌های سه‌بعدی و شبیه‌سازی پارچه در مرورگر.">
+  <meta name="theme-color" content="#141612">
+  <title>VFR Studio — اتاق پرو مجازی</title>
+  <link rel="icon" href="./mark.svg" type="image/svg+xml">
+  <script type="module" src="/src/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="./" dir="ltr" aria-label="VFR Studio">
+        <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>VFR<span class="brand-studio"> STUDIO</span></span>
+      </a>
+      <nav aria-label="استودیو">
+        <a href="#wardrobe">کمد لباس</a>
+        <button type="button" data-open="fit-dialog"><i data-icon="ruler"></i> اندازه‌گذاری</button>
+        <button type="button" data-open="help-dialog" class="help-link"><i data-icon="help"></i> راهنما</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="intro">
+      <div>
+        <h1>اتاق پرو <strong>مجازی</strong></h1>
+        <p>لباس را انتخاب کن، روبه‌روی آینه بایست و حرکت پارچه را ببین.</p>
+      </div>
+      <div class="privacy"><i data-icon="shield"></i> تصویر فقط روی همین دستگاه پردازش می‌شود</div>
+    </div>
+
+    <div class="workspace">
+      <section class="fitting" aria-label="آینهٔ پرو مجازی">
+        <div class="fitting-head">
+          <div class="modes" role="group" aria-label="ورودی تصویر">
+            <button type="button" data-mode="studio" aria-pressed="true"><i data-icon="cube"></i> استودیو</button>
+            <button type="button" data-mode="live" aria-pressed="false"><i data-icon="video"></i> دوربین زنده</button>
+            <button type="button" data-mode="photo" aria-pressed="false"><i data-icon="image"></i> عکس من</button>
+          </div>
+          <button type="button" class="icon-button" data-open="settings-dialog" aria-label="تنظیمات تصویر" title="تنظیمات تصویر"><i data-icon="settings"></i></button>
+        </div>
+
+        <div class="stage" id="stage" data-mode="studio" data-renderer="loading" aria-label="پیش‌نمایش لباس">
+          <div class="stage-light"></div>
+          <img id="poster" class="poster" src="./looks/studio.webp" alt="مانکن استودیو با پیراهن تک‌شانهٔ زرشکی">
+          <img id="photo" class="media" alt="" hidden>
+          <video id="video" class="media" autoplay muted playsinline hidden></video>
+          <canvas id="render" aria-hidden="true"></canvas>
+          <canvas id="overlay" aria-hidden="true"></canvas>
+          <div class="viewfinder" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <div class="stage-head">
+            <div class="signal"><span id="signal-dot" class="signal-dot"></span><span id="signal">آماده‌سازی استودیو</span></div>
+            <div class="view-actions">
+              <button type="button" id="near" class="icon-button glass" aria-label="نمای نیم‌تنه" title="نمای نیم‌تنه" aria-pressed="false"><i data-icon="crop"></i></button>
+              <button type="button" id="full" class="icon-button glass" aria-label="تمام‌صفحه" title="تمام‌صفحه"><i data-icon="maximize"></i></button>
+            </div>
+          </div>
+          <div class="stage-message" id="stage-message" hidden aria-live="polite">
+            <div class="message-icon"><i id="message-icon" data-icon="video"></i></div>
+            <strong id="message-title"></strong>
+            <p id="message-copy"></p>
+            <button type="button" class="primary" id="message-action" hidden></button>
+          </div>
+          <div class="stage-note" id="stage-note">
+            <span id="stage-look">پیراهن لونا</span>
+            <span id="stage-fabric">ساتن · زرشکی</span>
+          </div>
+          <div id="stage-meter" class="stage-meter" dir="ltr"></div>
+          <div id="stage-guidance" class="stage-guidance" aria-live="polite" hidden></div>
+          <div id="compare-ui" class="compare-ui" hidden>
+            <span class="before">بدون لباس</span><span class="after">با لباس</span>
+            <div class="compare-line"><span><i data-icon="split"></i></span></div>
+            <input type="range" id="compare-range" dir="ltr" min="5" max="95" value="50" aria-label="مرز مقایسهٔ قبل و بعد">
+          </div>
+        </div>
+
+        <div class="fitting-foot">
+          <div class="controls" role="group" aria-label="کنترل‌های آینه">
+            <button id="motion" type="button" class="action" aria-pressed="true"><i data-icon="motion"></i><span>حرکت</span></button>
+            <button id="wind" type="button" class="action" aria-pressed="false"><i data-icon="wind"></i><span>باد</span></button>
+            <button id="compare" type="button" class="action" aria-pressed="false"><i data-icon="split"></i><span>مقایسه</span></button>
+            <button id="capture" type="button" class="action"><i data-icon="camera"></i><span>ثبت عکس</span></button>
+          </div>
+          <button id="source-action" type="button" class="primary"><i data-icon="video"></i> روشن‌کردن دوربین</button>
+        </div>
+      </section>
+
+      <aside class="wardrobe" dir="rtl" id="wardrobe" aria-labelledby="wardrobe-title">
+        <div class="wardrobe-head">
+          <div class="wardrobe-heading">
+            <div class="title-with-icon"><i data-icon="hanger"></i><h2 id="wardrobe-title">کمد لباس</h2></div>
+            <span id="item-count" class="count">۸ مدل</span>
+          </div>
+          <div class="filters" role="group" aria-label="فیلتر لباس‌ها">
+            <button data-filter="all" type="button" aria-pressed="true">همه</button>
+            <button data-filter="women" type="button" aria-pressed="false">زنانه</button>
+            <button data-filter="men" type="button" aria-pressed="false">مردانه</button>
+            <button data-filter="custom" type="button" aria-pressed="false">قالب من</button>
+          </div>
+        </div>
+        <div id="garment-list" class="garment-list" aria-label="لباس‌ها"></div>
+        <template id="card-template">
+          <button type="button" class="look-card" aria-pressed="false">
+            <span class="look-image"><img alt="" width="460" height="520"><i class="selected-mark" data-icon="check"></i></span>
+            <span class="look-caption"><strong></strong><small></small></span>
+          </button>
+        </template>
+
+        <div class="look-detail">
+          <div class="detail-head">
+            <div><h3 id="look-name">پیراهن لونا</h3><span id="look-cut">پیراهن تک‌شانه · ساتن</span></div>
+            <div class="swatches" id="swatches" aria-label="رنگ لباس"></div>
+          </div>
+          <div class="sizing">
+            <div class="size-pills" id="sizes" dir="ltr" role="group" aria-label="سایز لباس"></div>
+            <button type="button" id="fit-link" class="text-button" data-open="fit-dialog">اندازه‌های من</button>
+          </div>
+          <p class="fit-state" id="fit-state"></p>
+        </div>
+        <button type="button" class="pattern-link" data-open="pattern-dialog"><i data-icon="plus"></i> ساخت یا بارگذاری قالب لباس</button>
+      </aside>
+    </div>
+
+    <footer class="footer">
+      <span><i data-icon="lock"></i> پردازش محلی تصویر و اندازه‌ها</span>
+      <span dir="ltr">VFR STUDIO <span class="footer-divider"></span> v1.0</span>
+      <a href="https://github.com/prestigegitserp/VFR_base/tree/v1" target="_blank" rel="noopener">کد و مستندات <i data-icon="code"></i></a>
+    </footer>
+  </main>
+
+  <dialog id="fit-dialog" aria-labelledby="fit-title">
+    <div class="dialog-head"><div><h2 id="fit-title">اندازه‌های من</h2><p>ابعاد بدن برای پیشنهاد سایز، بر حسب سانتی‌متر</p></div>
+      <button type="button" class="icon-button" data-close aria-label="بستن"><i data-icon="close"></i></button></div>
+    <form id="fit-form">
+      <div class="field-grid">
+        <label>قد <input name="height" type="number" min="120" max="218" inputmode="decimal" placeholder="۱۷۲"></label>
+        <label>دور سینه <input name="chest" type="number" min="45" max="175" inputmode="decimal" placeholder="۹۴"></label>
+        <label>دور کمر <input name="waist" type="number" min="40" max="170" inputmode="decimal" placeholder="۷۶"></label>
+        <label>دور باسن <input name="hips" type="number" min="45" max="180" inputmode="decimal" placeholder="۱۰۳"></label>
+      </div>
+      <p class="dialog-hint" id="fit-hint">برای برآورد دوربینی، قد را وارد کن و با دست‌های کمی باز روبه‌روی دوربین بایست. ضخامت بدن از یک تصویر تخمین زده می‌شود.</p>
+      <div id="fit-table" class="fit-table"></div>
+      <div class="dialog-actions">
+        <button type="submit" class="primary">ذخیرهٔ اندازه‌ها</button>
+        <button type="button" class="secondary" id="calibrate"><i data-icon="scan"></i> برآورد با دوربین</button>
+        <button type="button" class="text-button" id="clear-fit">پاک‌کردن اندازه‌ها</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="pattern-dialog" aria-labelledby="pattern-title">
+    <div class="dialog-head"><div><h2 id="pattern-title">قالب لباس</h2><p>برش، پارچه و اندازه‌های خود لباس را انتخاب کن.</p></div>
+      <button type="button" class="icon-button" data-close aria-label="بستن"><i data-icon="close"></i></button></div>
+    <form id="pattern-form">
+      <div class="field-grid">
+        <label class="field-wide">نام <input name="name" type="text" maxlength="48" required></label>
+        <label>برش <select name="cut"></select></label>
+        <label>جنس <select name="fabric"></select></label>
+        <label id="pattern-chest">دور سینه <input name="chest" type="number" min="65" max="170" required></label>
+        <label>دور کمر <input name="waist" type="number" min="50" max="160" required></label>
+        <label>دور باسن <input name="hips" type="number" min="65" max="175" required></label>
+        <label>قد لباس <input name="length" type="number" min="38" max="155" required></label>
+        <label class="color-field">رنگ <input name="color" type="color" value="#882739"></label>
+      </div>
+      <p id="pattern-error" class="dialog-hint" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="primary">پرو قالب</button>
+        <button type="button" class="secondary" id="import-pattern"><i data-icon="upload"></i> واردکردن JSON</button>
+        <button type="button" class="text-button" id="export-pattern">دریافت JSON</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-head"><div><h2 id="settings-title">تنظیمات آینه</h2><p>کیفیت نمایش و کنترل‌های دوربین</p></div>
+      <button type="button" class="icon-button" data-close aria-label="بستن"><i data-icon="close"></i></button></div>
+    <form class="settings">
+      <label class="setting">کیفیت تصویر <select id="quality"><option value="balanced">متعادل</option><option value="high">بالا</option></select></label>
+      <label class="setting">تصویر آینه‌ای دوربین <input type="checkbox" id="mirror" checked></label>
+      <label class="setting">پوشاندن لباس با دست در پیش‌زمینه <input type="checkbox" id="occlusion" checked></label>
+      <label class="setting">تعویض لباس با بالا بردن دست <input type="checkbox" id="gestures"></label>
+      <label class="setting">نمایش نقاط اسکلت <input type="checkbox" id="skeleton"></label>
+    </form>
+  </dialog>
+
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <div class="dialog-head"><div><h2 id="help-title">راهنمای اتاق پرو</h2></div>
+      <button type="button" class="icon-button" data-close aria-label="بستن"><i data-icon="close"></i></button></div>
+    <div class="help-copy">
+      <p><strong>استودیو</strong> با «حرکت» و «باد»، افت پارچه را روی مانکن ببین. «نمای نیم‌تنه» برای بررسی یقه و دوخت است.</p>
+      <p><strong>دوربین زنده</strong> روبه‌روی دوربین و در نور یکنواخت بایست. برای لباس بلند کمی عقب برو تا شانه‌ها، لگن و پاها در قاب باشند.</p>
+      <p><strong>عکس من</strong> از یک عکس روبه‌رو استفاده کن که شانه‌ها و لگن مشخص باشند.</p>
+      <p><strong>اندازه‌گذاری</strong> برای پیشنهاد سایز، ابعاد مترخورده را وارد کن یا با قد معلوم از دوربین برآورد بگیر. دوربین عمق بدن را تخمین می‌زند و توصیهٔ سایز تقریبی است.</p>
+      <p><strong>تعویض با دست</strong> پس از فعال‌کردن این گزینه در تنظیمات، یکی از دست‌ها را یک لحظه بالای شانه نگه دار.</p>
+    </div>
+  </dialog>
+
+  <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/avif,image/heic" hidden>
+  <input id="pattern-input" type="file" accept=".json,application/json" hidden>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
