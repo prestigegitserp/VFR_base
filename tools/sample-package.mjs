@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import * as T from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { zipSync, strToU8 } from 'fflate';
@@ -55,6 +55,7 @@ files['manifest.json']=strToU8(JSON.stringify(manifest,null,2));
 files['poster.webp']=await readFile(new URL('../public/looks/meridian.webp',import.meta.url));
 const zip=zipSync(files,{level:9});
 unpackPackage(zip);
+await mkdir(new URL('../public/protocol/',import.meta.url),{recursive:true});
 await writeFile(new URL('../public/protocol/atelier-scanned.zip',import.meta.url),zip);
 await writeFile(new URL('../docs/garment-manifest.json',import.meta.url),JSON.stringify(manifest,null,2)+'\n');
 console.log('Two valid GLB SKUs in',zip.length,'bytes');
