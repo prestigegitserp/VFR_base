@@ -708,17 +708,17 @@ $('calibrate').addEventListener('click', () => {
 });
 
 const patternForm = $('pattern-form');
-const fields = patternForm.elements;
+const patternField = (name) => patternForm.elements.namedItem(name);
 for (const [key, data] of [['cut', cuts], ['fabric', fabrics]]) {
-  for (const [value, option] of Object.entries(data)) fields[key].add(new Option(option.label, value));
+  for (const [value, option] of Object.entries(data)) patternField(key).add(new Option(option.label, value));
 }
 function patternLabels() {
-  const isSkirt = cuts[fields.cut.value].family === 'skirt';
-  $('pattern-chest').hidden = fields.chest.disabled = isSkirt;
+  const isSkirt = cuts[patternField('cut').value].family === 'skirt';
+  $('pattern-chest').hidden = patternField('chest').disabled = isSkirt;
 }
 function loadPatternForm(data) {
   for (const key of ['name', 'cut', 'fabric', 'color', 'chest', 'waist', 'hips', 'length']) {
-    fields[key].value = data[key] ?? '';
+    patternField(key).value = data[key] ?? '';
   }
   patternLabels();
   $('pattern-error').textContent = '';
@@ -726,14 +726,14 @@ function loadPatternForm(data) {
 
 function readPatternForm() {
   return readPattern({
-    schema: 1, name: fields.name.value, cut: fields.cut.value, fabric: fields.fabric.value, color: fields.color.value,
-    chest: fields.chest.valueAsNumber, waist: fields.waist.valueAsNumber, hips: fields.hips.valueAsNumber, length: fields.length.valueAsNumber,
+    schema: 1, name: patternField('name').value, cut: patternField('cut').value, fabric: patternField('fabric').value, color: patternField('color').value,
+    chest: patternField('chest').valueAsNumber, waist: patternField('waist').valueAsNumber, hips: patternField('hips').valueAsNumber, length: patternField('length').valueAsNumber,
   });
 }
-fields.cut.addEventListener('change', () => {
-  const ref = catalog.find((item) => item.cut === fields.cut.value);
-  fields.length.value = cuts[ref.cut].length;
-  if (!fields.chest.value) fields.chest.value = ref.chest ?? 96;
+patternField('cut').addEventListener('change', () => {
+  const ref = catalog.find((item) => item.cut === patternField('cut').value);
+  patternField('length').value = cuts[ref.cut].length;
+  if (!patternField('chest').value) patternField('chest').value = ref.chest ?? 96;
   patternLabels();
 });
 patternForm.addEventListener('submit', (event) => {

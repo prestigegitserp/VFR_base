@@ -173,6 +173,7 @@
         <button type="button" class="text-button" id="export-pattern">دریافت JSON</button>
       </div>
     </form>
+    <input id="pattern-input" type="file" accept=".json,application/json" hidden>
   </dialog>
 
   <dialog id="settings-dialog" aria-labelledby="settings-title">
@@ -200,7 +201,6 @@
   </dialog>
 
   <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/avif,image/heic" hidden>
-  <input id="pattern-input" type="file" accept=".json,application/json" hidden>
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

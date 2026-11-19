@@ -55,7 +55,10 @@ try {
  await page.locator('#fit-form [type=submit]').click();
  assert.match(await page.locator('#fit-state').textContent(),/پیشنهاد سایز/);
  await page.locator('.pattern-link').click();
- await page.locator('#pattern-input').setInputFiles(resolve('docs/garment-template.json'));
+ assert.ok(await page.locator('#pattern-dialog').isVisible(), 'template editor opens');
+ const patternChooser = page.waitForEvent('filechooser');
+ await page.locator('#import-pattern').click();
+ await (await patternChooser).setFiles(resolve('docs/garment-template.json'));
  await page.waitForFunction(()=>document.querySelector('#pattern-form [name=name]').value==='پیراهن سفارشی');
  await page.locator('#pattern-form [type=submit]').click();
  assert.equal(await page.locator('#look-name').textContent(),'پیراهن سفارشی');
