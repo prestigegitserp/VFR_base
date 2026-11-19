@@ -47,5 +47,7 @@ jobs:
             .render/pro-near.jpg
             .render/pro-orbit.jpg
             .render/pro-glasses.jpg
+            .render/pro-near-live.jpg
+            .render/pro-glasses-live.jpg
           retention-days: 3
           if-no-files-found: ignore

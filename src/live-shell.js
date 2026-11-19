@@ -54,14 +54,15 @@ function distanceRows(item, length) {
 }
 
 function makeCord(group, material, radius, count, name) {
-  const segments = 7, indices = [];
+  const segments = 7, indices = [], uv = [];
+  for (let i = 0; i < count; i++) for (let j = 0; j < segments; j++) uv.push(j / segments, i / (count - 1));
   for (let i = 0; i < count - 1; i++) {
     for (let j = 0; j < segments; j++) {
       const n = (j + 1) % segments, a = i * segments, b = (i + 1) * segments;
       appendQuad(indices, a + j, b + j, a + n, b + n);
     }
   }
-  const geometry = skinGeometry(count * segments, indices);
+  const geometry = skinGeometry(count * segments, indices, uv);
   const mesh = new T.Mesh(geometry, material);
   mesh.name = name; mesh.frustumCulled = false; group.add(mesh);
   const positions = geometry.attributes.position;
@@ -166,13 +167,50 @@ export function makeLiveShell(item, size, color) {
     draw: makeCord(group, cloth.dark, .0029, 43, 'Recessed zipper tape'),
     path: (_, sample) => Array.from({ length: 43 }, (_, i) => sample(0, .016 + i / 42 * (length - .026), .003)),
   });
+  const zipper = zipped ? new T.InstancedMesh(new T.BoxGeometry(.0034, .0028, .0020), cloth.metal, 92) : null;
+  if (zipper) {
+    zipper.name = 'Individual metal teeth';
+    zipper.frustumCulled = false;
+    zipper.instanceMatrix.setUsage(T.DynamicDrawUsage);
+    group.add(zipper);
+  }
+  if (tailored || zipped) for (const s of [-1, 1]) {
+    cords.push({
+      draw: makeCord(group, cloth.lining, .0040, 18, 'Welt pocket'),
+      path: (_, sample) => Array.from({ length: 18 }, (_, i) => {
+        const along = i / 17;
+        return sample(s * mix(.61, 1.10, along), length * mix(.737, .635, along), .004);
+      }),
+    });
+  }
   if (tailored) for (const side of [-1, 1]) {
+    const trimSize = 19, trimIndices = [];
+    for (let i = 0; i < trimSize - 1; i++) appendQuad(trimIndices, i * 2, i * 2 + 2, i * 2 + 1, i * 2 + 3);
+    const trimUv = Array.from({length:trimSize},(_,i)=>[0,i/(trimSize-1),1,i/(trimSize-1)]).flat();
+    const trimGeo = skinGeometry(trimSize * 2, trimIndices, trimUv);
+    const lapel = new T.Mesh(trimGeo, cloth.lapel);
+    lapel.name = 'Folded lapel';
+    lapel.frustumCulled = false;
+    group.add(lapel);
     cords.push({
       draw: makeCord(group, cloth.edge, .0022, 29, 'Lapel edge stitch'),
       path: (_, sample) => Array.from({ length: 29 }, (_, i) => {
         const d = i / 28 * .254;
         return sample(side * (.51 * (1 - d / .254) + .026), d, .0038);
       }),
+    });
+    cords.push({
+      path: (_, sample) => Array.from({ length: trimSize }, (_, i) => {
+        const t = i / (trimSize - 1), d = t * .254, a = .51 * (1 - t) + .028;
+        const spread = (.48 * Math.sin(Math.PI * t) ** .75 + .045) * (t > .43 ? .88 : 1);
+        return [sample(side * a, d, .0055), sample(side * (a + spread), d, .0086)];
+      }),
+      draw(points) {
+        const attr = trimGeo.attributes.position;
+        points.flat().forEach((p, i) => attr.setXYZ(i, p.x, p.y, p.z));
+        attr.needsUpdate = true;
+        trimGeo.computeVertexNormals();
+      },
     });
   }
   if (dress) for (const s of [-1,1]) {
@@ -194,6 +232,7 @@ export function makeLiveShell(item, size, color) {
   }
 
   let motion = V(), velocity = V(), lastOrigin = null, phase = 0;
+  const toothMatrix = new T.Matrix4();
   function update(volume, localArms, time, dt, breeze, origin, dynamics = true) {
     if (!volume) return;
     const width = volume.width, len = volume.length, neck = volume.neck;
@@ -282,6 +321,15 @@ export function makeLiveShell(item, size, color) {
     geometry.computeVertexNormals();
     cords.forEach(cord => cord.draw(cord.path(volume, sample)));
     buttons.forEach(({ m, d }) => m.position.copy(sample(zipped ? 0 : -.17, d, .004)));
+    if (zipper) {
+      for (let i = 0; i < zipper.count; i++) {
+        const d = .025 + (length - .043) * i / (zipper.count - 1);
+        const p = sample(i % 2 ? .009 : -.009, d, .006);
+        toothMatrix.makeTranslation(p.x, p.y, p.z);
+        zipper.setMatrixAt(i, toothMatrix);
+      }
+      zipper.instanceMatrix.needsUpdate = true;
+    }
   }
   return {
     group, shell, holes, update,

@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { strict as assert } from 'node:assert';
 import { resolve, extname } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import jpeg from 'jpeg-js';
 
@@ -23,6 +24,8 @@ async function crop(file,name,u,v,w,h){
 }
 const upper=await crop(photo,'upper-fixture',.27,.32,.47,.292);
 const close=await crop(portrait,'close-fixture',.095,.010,.81,.455);
+const closeVideo=resolve('.render/close-camera.y4m');
+execFileSync(process.execPath,['tests/y4m-fixture.mjs',close,closeVideo]);
 const root=resolve('dist');
 const headers={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json',
   '.wasm':'application/wasm','.webp':'image/webp','.woff2':'font/woff2','.svg':'image/svg+xml'};
@@ -39,16 +42,21 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v4/';
 let instance;
 try{
-  instance=await chromium.launch({headless:true,executablePath:process.env.VFR_CHROMIUM,args:[
+  const launch=(input)=>chromium.launch({headless:true,executablePath:process.env.VFR_CHROMIUM,args:[
     '--enable-unsafe-swiftshader','--use-angle=swiftshader','--use-fake-device-for-media-stream',
-    '--use-fake-ui-for-media-stream','--use-file-for-fake-video-capture='+video,
+    '--use-fake-ui-for-media-stream','--use-file-for-fake-video-capture='+input,
   ]});
-  const context=await instance.newContext({viewport:{width:1200,height:800},acceptDownloads:true,permissions:['camera'],reducedMotion:'reduce'});
-  const page=await context.newPage();
-  page.setDefaultTimeout(45000);
   const errors=[];
-  page.on('pageerror',e=>errors.push(e.message));
-  page.on('console',line=>{if(line.type()==='error')console.log('browser console:',line.text().slice(0,350));});
+  async function desktop(browser){
+    const context=await browser.newContext({viewport:{width:1200,height:800},acceptDownloads:true,permissions:['camera'],reducedMotion:'reduce'});
+    const tab=await context.newPage();
+    tab.setDefaultTimeout(45000);
+    tab.on('pageerror',e=>errors.push(e.message));
+    tab.on('console',line=>{if(line.type()==='error')console.log('browser console:',line.text().slice(0,350));});
+    return tab;
+  }
+  instance=await launch(video);
+  let page=await desktop(instance);
   await page.goto(url);
   await page.locator('#stage[data-renderer=webgl]').waitFor();
   assert.equal(await page.locator('.look').count(),8);
@@ -113,6 +121,16 @@ try{
   }
   const shots=Boolean(process.env.VFR_BROWSER_SHOTS);
   const preview=(name)=>shots?page.screenshot({path:'.render/pro-'+name+'.jpg',type:'jpeg',quality:89}):null;
+  async function expectOverlay(valid){
+    const deadline=Date.now()+19_000;
+    let measured;
+    do{
+      measured=await overlay();
+      if(valid(measured))return measured;
+      await new Promise(resolve=>setTimeout(resolve,160));
+    }while(Date.now()<deadline);
+    throw new Error('Incorrect overlay: '+JSON.stringify(measured));
+  }
   async function openDiagnostics(){
     await page.locator('#inspect').click();
     await page.locator('#inspector').waitFor();
@@ -231,6 +249,25 @@ try{
   await mobile.goto(url);
   await mobile.locator('.look').first().waitFor();
   assert.ok(await mobile.evaluate(()=>document.body.scrollWidth===innerWidth));
-  assert.deepEqual(errors,[]);
   console.log('OK: mobile viewport');
+
+  await instance.close();
+  instance=await launch(closeVideo);
+  page=await desktop(instance);
+  await page.goto(url);
+  await page.locator('#stage[data-renderer=webgl]').waitFor();
+  await page.locator('.look[data-look=orion]').click();
+  await page.locator('button[data-source=live]').click();
+  await page.locator('#stage[data-depth=body][data-matte=active]').waitFor({timeout:115000});
+  const nearLive=await expectOverlay(p=>p.count>130&&p.y>p.height*.41);
+  await preview('near-live');
+  await page.locator('button[data-frame=face]').click();
+  await expectSignal('ردیابی چهره');
+  await page.locator('#stage[data-depth=face]').waitFor();
+  const lensLive=await expectOverlay(p=>p.count>48&&p.w>60&&p.y<p.height*.52);
+  await preview('glasses-live');
+  await page.locator('button[data-source=studio]').click();
+  assert.equal(await page.locator('#video').evaluate(v=>!!v.srcObject),false);
+  assert.deepEqual(errors,[]);
+  console.log('OK: near webcam body and mirrored optics on the same moving stream',nearLive,lensLive);
 }finally{await instance?.close();server.close();}
