@@ -88,6 +88,7 @@ try{
     }catch(e){
       const status=await page.locator('#state-label').innerText();
       const message=await page.locator('#message-body').textContent();
+      console.log('landmark count:',await page.locator('#stage').getAttribute('data-landmarks'));
       throw new Error(`Expected ${label}; saw ${status}: ${message}; errors: ${errors.join(' / ')}`,{cause:e});
     }
   }
@@ -104,6 +105,7 @@ try{
   await page.locator('button[data-frame=face]').click();
   await page.locator('#photo-file').setInputFiles(portrait);
   await expectSignal('پرو روی عکس');
+  assert.equal(await page.locator('#stage').getAttribute('data-landmarks'),'478');
   console.log('OK: face-only image tracking',await page.locator('#stage').getAttribute('data-vision'));
   await page.locator('button[data-frame=full]').click();
   await page.locator('button[data-source=live]').click();

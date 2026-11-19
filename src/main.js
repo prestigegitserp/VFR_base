@@ -38,7 +38,7 @@ let commands=Promise.resolve(), metricsAt=0, reportCount=0, prev=0, noticeTimer,
 let bounds={w:1,h:1}, renderKey=null;
 const enqueue=(fn)=>{const p=commands.then(fn);commands=p.catch(()=>{});return p;};
 const gpu=()=>!!studio&&!studio.lost;
-const semantic=()=>state.occlusion||Boolean(state.scan);
+const semantic=()=>state.occlusion||state.mode==='upper'||Boolean(state.scan);
 const source=()=>state.source==='live'&&video.readyState>=2?video:state.source==='photo'&&img.complete&&img.naturalWidth?img:null;
 const mediaSize=(m)=>[m?.videoWidth??m?.naturalWidth,m?.videoHeight??m?.naturalHeight];
 const sourceRect=(media)=>{
@@ -186,6 +186,7 @@ async function updateLook(updateForm) {
     }
   }catch(error){
     if(id!==display)return;
+    studio.clearGarment();
     if(state.source==='studio'){
       stage.dataset.renderer='flat';
       signal('رندر کاتالوگ','pending');
@@ -211,7 +212,7 @@ $$('button[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.fil
 function resetVision() {
   state.ready=false;state.tracked=null;state.mask=null;state.stamp=0;
   state.lastInfer=0;state.delegate='';
-  delete stage.dataset.mask;delete stage.dataset.vision;
+  delete stage.dataset.mask;delete stage.dataset.vision;delete stage.dataset.landmarks;
   smoothPose.clear();smoothFace.clear();
   lastFrame=-1;
   guide(null);message();
@@ -351,6 +352,7 @@ function applyTracking(result,at){
   state.delegate=result.delegate;state.lastInfer=result.timeMs;
   stage.dataset.vision=vision.worker?'worker':'main';
   if(result.mask)stage.dataset.mask='ready';
+  stage.dataset.landmarks=String((result.pose?.length??0)+(result.face?.length??0));
   const {pose,face,mask,matrix}=result;
   state.tracked={pose:pose?smoothPose.update(pose,at):null,face:face?smoothFace.update(face,at):null,matrix,
     mask:mask??state.mask};
@@ -398,8 +400,9 @@ function light(media) {
 }
 function scanPrompt(now){
   if(!state.scan)return false;
-  const {sensor,deadline}=state.scan;
-  if(now>deadline){
+  const {sensor}=state.scan;
+  state.scan.deadline??=now+42_000;
+  if(now>state.scan.deadline){
     state.scan=null;toast('هر دو نما کامل نشدند. لباس جذب، نور یکنواخت یا اندازه‌های مترخورده را امتحان کن.');
     return false;
   }
@@ -555,7 +558,7 @@ $('scan-start').addEventListener('click',()=>{
   const heightMm=Math.round(v.valueAsNumber*10);
   $('fit-dialog').close();changeFrame('full');
   if(state.source!=='live'||!stream&&!state.busy)changeSource('live');
-  state.scan={sensor:new TwoViewScan(heightMm),deadline:performance.now()+42000};
+  state.scan={sensor:new TwoViewScan(heightMm),deadline:null};
   guide('برای نمای اول، تمام‌قد روبه‌رو بایست.');
 });
 

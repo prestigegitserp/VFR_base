@@ -153,10 +153,11 @@ export function makeWear(item, size, color, torso=.45) {
     for(const a of [-1.57,1.57,Math.PI]) tube(group,m.lapel,track(a-.04,a,.19,.993),.0018,'Seam topstitch');
   }
   if(tailored) {
-    const v=.037+centerZ;
-    const insert=[[-.087,.041,v+.021],[0,.030,v+.056],[.087,.041,v+.021],
-      [.054,-.094,v+.085],[0,-.137,v+.080],[-.054,-.094,v+.085]];
-    panel(group,m.dark,insert,[0,1,5,1,4,5,1,2,3,1,3,4],'Underlayer at neckline');
+    mesh(group,grid(26,20,(u,t)=>{
+      const x=(u-.5)*2;
+      return [x*mix(.112,.060,t),.056-t*.199-.011*x*x,
+        centerZ+.091+.035*Math.sin(t*Math.PI/2)-.027*x*x];
+    },false),m.dark,'Knit underlayer');
     for(const s of [-1,1]) {
       const scale=shoulder/.214;
       const neck = [[.068,.014,.079],[.139,-.059,.111],[.093,-.127,.138],[.106,-.104,.144],

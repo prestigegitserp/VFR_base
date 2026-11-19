@@ -5,7 +5,8 @@ export const WORLD_HEIGHT=1.98;
 export const joint={ nose:0, sl:11,sr:12,el:13,er:14,wl:15,wr:16, il:19,ir:20,hl:23,hr:24,kl:25,kr:26,al:27,ar:28 };
 const V = (x=0,y=0,z=0)=>new T.Vector3(x,y,z);
 const mid=(a,b)=>a.clone().lerp(b,.5);
-export const confident=(p,min=.48)=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&Number.isFinite(p.z)&&(p.visibility??1)>=min;
+const pointOkay=(p)=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&Number.isFinite(p.z);
+export const confident=(p,min=.48)=>pointOkay(p)&&(p.visibility??1)>=min;
 
 export function contain(width,height,w,h) {
   const scale=Math.min(w/width,h/height);
@@ -50,8 +51,9 @@ function basis(x,up){
 }
 
 export function faceRig(points,matrix,rect,view,mirror,body) {
-  if(!points||!confident(points[33])||!confident(points[263]))return null;
-  const normalLeft=points[468]??points[33],normalRight=points[473]??points[263];
+  if(!points||![points[33],points[263],points[152]].every(pointOkay))return null;
+  const normalLeft=pointOkay(points[468])?points[468]:points[33];
+  const normalRight=pointOkay(points[473])?points[473]:points[263];
   const gaze=unproject([normalLeft,normalRight,points[152],points[168]??points[6]],rect,view,mirror,(normalLeft.z+normalRight.z)/2);
   const left=gaze[0].x<gaze[1].x?gaze[0]:gaze[1],right=gaze[0].x<gaze[1].x?gaze[1]:gaze[0];
   const center=mid(left,right), span=right.clone().sub(left).length();

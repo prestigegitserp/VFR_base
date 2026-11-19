@@ -111,13 +111,19 @@ export class Atelier {
     this.reference={ shoulder:spec.measure.shoulder, torso:this.avatar.spec.shoulderY-this.avatar.spec.hipY };
     this.fresh=true;
   }
+  clearGarment(){
+    this.pendingGarment=false;
+    if(!this.wear)return;
+    this.wear.group.parent?.remove(this.wear.group);
+    this.wear.dispose();
+    this.wear=null;
+  }
   async garment(item,size,color,bytes) {
     const tag=++this.assetId;
     this.pendingGarment=true;
     const p=bytes?await importWear(item,size,bytes):makeWear(item,size,color,this.reference?.torso??.45);
     if(tag!==this.assetId){p.dispose();return false;}
-    this.pendingGarment=false;
-    if(this.wear){this.wear.group.parent?.remove(this.wear.group);this.wear.dispose();}
+    this.clearGarment();
     this.wear=p;
     this.item=item;
     this.attachment=item.frame;

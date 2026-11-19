@@ -150,6 +150,7 @@ export function makeAvatar(data, measure) {
         const at=i*3;
         const x=rest[at], y=rest[at+1];
         if(y<hem+.008||y>start)continue;
+        if(sleeved && y>base-.047 && Math.abs(x)<.077)continue;
         if(segments[i]===1||segments[i]===2){
           if(weights[i]>.65){
             if(!sleeved)continue;

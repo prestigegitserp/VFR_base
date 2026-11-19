@@ -52,7 +52,7 @@ test('upper framing needs neither hips nor feet while full mode requires hips',(
 });
 
 test('face rig uses eye and chin markers on their own',()=>{
-  const face=Array.from({length:478},()=>({x:.5,y:.45,z:0}));
+  const face=Array.from({length:478},()=>({x:.5,y:.45,z:0,visibility:0}));
   face[468]={x:.40,y:.43,z:0};face[473]={x:.62,y:.44,z:.020};face[152]={x:.51,y:.66,z:.01};
   const view={w:850,h:560};
   const rig=faceRig(face,null,contain(1280,720,view.w,view.h),view,false,null);
