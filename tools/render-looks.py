@@ -119,10 +119,10 @@ def render(name, samples):
     scene.collection.objects.link(camera)
     scene.camera = camera
     camera_data.type = "ORTHO"
-    camera_data.ortho_scale = height * (1.46 if studio else 1.28)
+    camera_data.ortho_scale = height * (2.04 if studio else 1.28)
     camera.location = (0.35 if studio else 2.12, -8, center + (.89 if studio else .49))
     point(camera, (0, 0, center + (.065 if studio else .035)))
-    scene.render.resolution_x, scene.render.resolution_y = (1080, 840) if studio else (460, 520)
+    scene.render.resolution_x, scene.render.resolution_y = (1440, 820) if studio else (460, 520)
     scene.render.filepath = str(ROOT / ".render" / f"{name}.png")
     bpy.ops.render.render(write_still=True)
 

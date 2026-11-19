@@ -1,6 +1,6 @@
 # VFR Studio · اتاق پرو مجازی
 
-[نسخهٔ آنلاین](https://vfr-fitting-studio.ardent-slug-5662.chatgpt.site) · [طراحی فنی و بررسی رقبا](docs/ENGINEERING_FA.md) · [نمونهٔ قالب](docs/garment-template.json)
+[اتاق پرو آنلاین در GitHub Pages](https://prestigegitserp.github.io/VFR_base/) · [طراحی فنی و بررسی رقبا](docs/ENGINEERING_FA.md) · [نمونهٔ قالب](docs/garment-template.json)
 
 پرو زندهٔ لباس با یک وب‌کم RGB معمولی. مدل تشخیص حالت بدن، آینه و رندر سه‌بعدی روی دستگاه بازدیدکننده اجرا می‌شوند. هشت لباس اولیه شامل پیراهن تک‌شانه و بنددار، دامن پلیسه، کت زنانه و مردانه، بامبر، بارانی و هودی‌اند. هر لباس سه رنگ و پنج سایز دارد. پیش‌نمایش کاتالوگ با Blender Cycles از همان هندسه‌ای تولید شده که در آینه حرکت می‌کند.
 

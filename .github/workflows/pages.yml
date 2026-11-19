@@ -28,7 +28,9 @@ jobs:
       - run: npm run stage:models
       - run: npm run build
       - name: Install Chromium for browser checks
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install --with-deps --only-shell chromium
+          sudo apt-get install --no-install-recommends -y ffmpeg
       - name: Exercise photo and webcam fitting
         shell: bash
         run: |

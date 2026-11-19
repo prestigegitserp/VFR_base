@@ -47,8 +47,8 @@ try {
  await page.locator('[data-filter="men"]').click();
  assert.equal(await page.locator('.look-card').count(),4);
  await page.locator('.look-card[data-look="ash"]').click();
- await page.locator('#sizes button').getByText('XL',{exact:true}).click();
- await page.getByRole('button',{name:'آبی دودی',exact:true}).click();
+ await page.locator('#sizes button').filter({ hasText: /^XL$/ }).click();
+ await page.locator('#swatches button[aria-label="آبی دودی"]').click();
  assert.equal(await page.locator('#look-name').textContent(),'بامبر اِش');
  await page.locator('#fit-link').click();
  for (const [k,v] of Object.entries({height:174,chest:100,waist:88,hips:96})) await page.locator('#fit-form [name='+k+']').fill(String(v));
