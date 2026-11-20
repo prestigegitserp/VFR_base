@@ -87,7 +87,7 @@ export function buildFitMatte(mask, rig, { coverage, occlusion, cut, tailored = 
       } else if (body && category === labels.skin && cut !== 'skirt') {
         const dx = (u - collar.x) / span;
         const dy = (v - collar.y - rig.screenSlope * (u - collar.x)) / vertical;
-        const depth = tailored ? .29 : cut === 'dress' ? .24 : .103;
+        const depth=rig.view==='back'?.073:rig.view==='side'?.106:tailored?.29:cut==='dress'?.24:.103;
         const edge = depth * (1 - .53 * Math.min(1, Math.abs(dx) * 3.8));
         const throat = (1 - smooth(.17, .26, Math.abs(dx))) * (1 - smooth(edge - .026, edge + .033, dy));
         keep *= 1 - throat * .97;
@@ -132,6 +132,17 @@ function drawDiagnostics(ctx, studio, rig) {
     send(rig.shoulder, '#9be8f0', 2);
     send([rig.collar, rig.origin, ...Object.values(rig.sections).map(x => x.center)], '#ffbe85', 2);
     if (rig.hip) send(rig.hip, '#9be8f0');
+    if(rig.volume){
+      const rotate=p=>p.applyQuaternion(rig.q).add(rig.origin);
+      for(const ring of rig.volume.rings.filter((_,i)=>[1,3,6,9].includes(i))){
+        const points=Array.from({length:25},(_,k)=>{
+          const a=k/24*Math.PI*2,p=ring.center.clone();
+          p.x+=Math.sin(a)*ring.rx;p.z+=Math.cos(a)*ring.rz;
+          return rotate(p);
+        });
+        send(points,'#f6b785',.72);
+      }
+    }
     rig.arms.forEach((arm, i) => {
       ctx.setLineDash(rig.armQuality[i] < .55 ? [4, 5] : []);
       send(arm, '#a6e1a5');

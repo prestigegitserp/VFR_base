@@ -6,6 +6,8 @@ import { clamp } from './catalog.js';
 import { dispose, makeWear } from './wear.js';
 import { FittedStage } from './fitted-stage.js';
 import { prepareImportedFit } from './imported-fit.js';
+import { BodyMesh } from './body-mesh.js';
+import { shapeSections } from './body-shape.js';
 
 const V=(x=0,y=0,z=0)=>new T.Vector3(x,y,z);
 function light(scene,color,intensity,position,shadow=false){
@@ -57,6 +59,20 @@ async function importWear(item,size,bytes) {
     container.traverse((o)=>{for(const m of (Array.isArray(o.material)?o.material:[o.material]).filter(Boolean))for(const value of Object.values(m))if(value?.isTexture)textures.add(value);});
     dispose(container);textures.forEach((t)=>t.dispose());
   }};
+}
+
+function mannequinVolume(avatar, measures, pose, origin) {
+  const local=chain=>chain.map(p=>p.clone().sub(origin));
+  const order=chains=>chains.map(local).sort((a,b)=>a[0].x-b[0].x);
+  const arms=order(pose.arms), legs=order(pose.legs);
+  const width=measures.shoulder*.001, length=avatar.spec.shoulderY-avatar.spec.hipY;
+  const profile={method:'manual',measures:Object.fromEntries(Object.entries(measures).map(([key,value])=>[key,{value}]))};
+  const rings=shapeSections(width,profile).rings.map(r=>({...r,
+    center:V(0,-length*r.t,-.017*r.t),front:1.11,back:.89}));
+  const crowns=arms.map(([p])=>p.clone().add(V(0,.032,0)));
+  const center=V(0,.045,-.009);
+  const neck={center,rx:width*.147,rz:width*.131,joint:center.clone().add(V(0,.072,-.003))};
+  return { arms, volume:{width,length,crowns,rings,neck,leg:legs,mode:'full',height:measures.height*.001} };
 }
 
 export class Atelier {
@@ -118,6 +134,7 @@ export class Atelier {
     if(tag!==this.frameId)return;
     if(this.avatar){this.root.remove(this.avatar.model);this.avatar.dispose();}
     this.avatar=makeAvatar(data,spec.measure);
+    this.bodyMeasures=spec.measure;
     this.bodySignature=signature;
     this.root.add(this.avatar.model);
     this.reference={ shoulder:spec.measure.shoulder, sleeve:spec.measure.sleeve, torso:this.avatar.spec.shoulderY-this.avatar.spec.hipY };
@@ -125,21 +142,22 @@ export class Atelier {
   }
   clearGarment(){
     this.pendingGarment=false;
+    const shared=this.wear===this.fitted.product;
     this.fitted.clear();
-    if(!this.wear)return;
-    this.wear.group.parent?.remove(this.wear.group);
-    this.wear.fittedGroup?.removeFromParent();
-    this.wear.dispose();
-    this.wear=null;
+    if(this.wear&&!shared){
+      this.wear.group.removeFromParent();this.wear.fittedGroup?.removeFromParent();
+      this.wear.dispose();
+    }
+    this.wear=null;this.studioFit=null;
   }
   async garment(item,size,color,bytes) {
     const tag=++this.assetId;
     this.pendingGarment=true;
-    const p=bytes?await importWear(item,size,bytes):makeWear(item,size,color,this.reference?.torso??.45);
-    if(tag!==this.assetId){p.dispose();return false;}
+    const p=bytes?await importWear(item,size,bytes):item.frame==='face'?makeWear(item,size,color,this.reference?.torso??.45):null;
+    if(tag!==this.assetId){p?.dispose();return false;}
     this.clearGarment();
-    this.wear=p;
     this.fitted.prepare(item,size,color);
+    this.wear=p??this.fitted.product;
     this.item=item;
     this.attachment=item.frame;
     this.avatar?.cover(item,size);
@@ -153,7 +171,7 @@ export class Atelier {
     this.wear?.reset();
     this.fitted.reset();
   }
-  update({dt,time,mode,rig,move,wind,turn,zoom,lightValue,reduce,adjustment,mirror=false,orbit=null,orbitMode='fit',quick=false}){
+  update({dt,time,mode,rig,move,wind,turn,zoom,lightValue,reduce,adjustment,mirror=false,orbit=null,orbitMode='fit',quick=false,diagnose=false}){
     if(this.lost)return;
     const demo=this.source==='studio';
     this.plinth.visible=this.floor.visible=demo&&mode==='full';
@@ -171,7 +189,7 @@ export class Atelier {
       if(wear)wear.setPresentation?.(false);
       this.activeGarment=compatible?(this.fitted.product?.group??wear.fittedGroup??wear.group):null;
       this.camera=this.fitted.update({rig:compatible?rig:null,mirror,adjustment,orbit,width:this.width,
-        height:this.height,time,dt,breeze:wind,scanned:wear,orbitMode,quick});
+        height:this.height,time,dt,breeze:wind,scanned:wear,orbitMode,quick,diagnose});
       return;
     }
     this.fitted.group.visible=false;
@@ -190,19 +208,27 @@ export class Atelier {
     if(wear.group.parent!==root)root.add(wear.group);
     wear.setPresentation?.(true);
     wear.group.visible=(mode==='face')===(this.attachment==='face');
-    const rootAngle=mode==='face'?turn + (move?.23*Math.sin(this.play*.95):0):turn-.095+(move?.29*Math.sin(this.play*1.25):0);
+    const rootAngle=turn;
     if(move)this.play+=dt;
     this.root.rotation.y=rootAngle;
     this.root.position.x=mode==='full'&&move? .041*Math.sin(this.play*1.19):0;
     root.position.copy(this.attachment==='face'?avatar.spec.face:V(0,avatar.spec.shoulderY,0));
-    const changed=this.fresh||move&&time-this.clock>29;
-    const pose=changed?avatar.update(this.play,move):avatar.pose;
-    if(changed)this.clock=time;
-    const loc=([a,b,c])=>[a,b,c].map(q=>q.clone().sub(root.position));
-    const legs=pose.legs.map(loc).flatMap(([a,b,c])=>[{a,b,radius:.073},{a:b,b:c,radius:.052}]);
-    if(wear.group.visible&&(changed||wind||move))wear.update(pose.arms.map(loc),legs,dt,{
-      x:move?2.5*Math.sin(this.play*3.1):0,z:0,y:0,turn:move?2.0*Math.cos(this.play*1.25):0,wind:wind?7.4:move&&!reduce?1.0:0,
-    },null,changed);
+    const updatePose=this.fresh||move&&time-this.clock>61;
+    const elapsed=this.clock?clamp((time-this.clock)*.001,dt,.049):dt;
+    const pose=updatePose?avatar.update(this.play,move):avatar.pose;
+    if(wear.group.visible&&this.fitted.product===wear) {
+      if(updatePose||!this.studioFit){
+        this.studioCollider??=new BodyMesh(true);
+        this.studioFit=mannequinVolume(avatar,this.bodyMeasures,pose,root.position);
+        this.studioCollider.update(this.studioFit.volume,this.studioFit.arms,[]);
+      }
+      if(updatePose||wind&&time-this.clock>63||!wear.stats()){
+        wear.view('fit');
+        wear.update(this.studioFit.volume,this.studioFit.arms,time,elapsed,wind,root.position,
+          {skin:this.studioCollider,collider:this.studioCollider.collider,quick:true,diagnose});
+        this.clock=time;
+      }
+    }else if(updatePose)this.clock=time;
     this.fresh=false;
   }
   draw(split=0){

@@ -225,3 +225,17 @@ input[type=checkbox],input[type=range]{accent-color:#865036}
 .stage #camera-frame{object-fit:contain}
 
 .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+
+.stage-tags,.turn-presets{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.stage-tags .state-tag{white-space:nowrap}
+.orbit-tools .turn-presets{flex:1 0 100%}
+.turn-presets .text-tool span[dir=ltr]{opacity:.78;font-variant-numeric:tabular-nums}
+.turn-play{margin-inline-start:auto}
+.stage[data-source=studio][data-renderer=webgl]{cursor:grab;touch-action:pan-y}
+.stage[data-source=studio][data-renderer=webgl]:active{cursor:grabbing}
+@media(max-width:530px){
+  .turn-presets .text-tool{min-height:32px;padding-inline:6px;font-size:.75rem}
+  .turn-play{margin-inline-start:0}
+  .orbit-tools{padding-inline:9px}
+  .stage-tags .state-tag{font-size:.76rem}
+}

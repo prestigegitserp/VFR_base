@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f0e9">
   <meta name="description" content="پرو سه‌بعدی VFR Atelier با بازسازی مش بدن، شبیه‌سازی تماس پارچه و فیت عینک.">
-  <title>VFR Atelier v6 · مش بدن و پرو سه‌بعدی</title>
+  <title>VFR Atelier v7 · پرو سه‌بعدی و چرخش ۱۸۰ درجه</title>
   <link rel="icon" href="./mark.svg" type="image/svg+xml">
   <script type="module" src="/src/main.js"></script>
 </head>
@@ -17,14 +17,14 @@
         <a href="#wardrobe">کمد لباس</a>
         <button class="nav-button" type="button" data-open="import-dialog"><i data-icon="upload"></i> ورود اسکن</button>
         <button class="nav-button" type="button" data-open="cart-dialog"><i data-icon="bag"></i> <span>سفارش</span> <b id="cart-count" hidden>۰</b></button>
-        <a class="old-version" href="../v4/" aria-label="مشاهده نسخه ۴" dir="ltr">v4</a>
+        <a class="old-version" href="../v6/" aria-label="مشاهده نسخه ۶" dir="ltr">v6</a>
       </nav>
     </div>
   </header>
 
   <main class="page">
     <div class="intro">
-      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>مش بدنت را از دوربین یا عکس بساز و تن‌خور لباس را از همه طرف بررسی کن.</p></div>
+      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>تن‌خور را در روبه‌رو، نیم‌رخ و پشت ببین. دوربین حرکت بدنت را دنبال می‌کند.</p></div>
       <button type="button" class="outline intro-fit" data-open="fit-dialog"><i data-icon="ruler"></i> ساخت مش و اندازه</button>
     </div>
     <div class="workspace">
@@ -52,7 +52,10 @@
           <canvas id="foreground" aria-hidden="true"></canvas>
           <div class="viewfinder" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           <div class="stage-top">
-            <span class="state-tag"><b id="state-dot"></b><span id="state-label">آماده‌سازی آتلیه</span></span>
+            <div class="stage-tags">
+              <span class="state-tag"><b id="state-dot"></b><span id="state-label">آماده‌سازی آتلیه</span></span>
+              <span class="state-tag" id="direction-tag" hidden></span>
+            </div>
             <button type="button" id="fullscreen" class="icon-btn glass" aria-label="تمام صفحه" title="تمام صفحه"><i data-icon="maximize"></i></button>
           </div>
           <div id="message" class="message" aria-live="polite" hidden><i id="message-icon" data-icon="scan"></i><strong id="message-title"></strong><p id="message-body"></p><button type="button" id="message-action" class="primary" hidden></button></div>
@@ -71,11 +74,18 @@
           </div>
           <div class="fit-tools">
             <button type="button" class="text-tool" id="view-volume" aria-label="نمای سه‌بعدی تن‌خور" title="نمای سه‌بعدی تن‌خور" aria-pressed="false" hidden><i data-icon="cube"></i><span>نمای سه‌بعدی</span></button>
+            <button type="button" class="text-tool" id="turn-person" aria-pressed="false" hidden><i data-icon="rotate"></i><span>چرخش زندهٔ ۱۸۰°</span></button>
             <button type="button" class="text-tool" id="adjust-fit" data-open="alignment-dialog" aria-label="تنظیم تن‌خور" title="تنظیم تن‌خور" hidden><i data-icon="crop"></i><span>تنظیم تن‌خور</span></button>
             <button type="button" class="text-tool" id="inspect" aria-label="عیب‌یابی ردیابی" title="عیب‌یابی ردیابی" aria-pressed="false" aria-controls="inspector"><i data-icon="motion"></i><span>عیب‌یابی</span></button>
           </div>
         </div>
         <div class="orbit-tools" id="orbit-tools" hidden>
+          <div class="turn-presets" role="group" aria-label="جهت نمای سه‌بعدی">
+            <button type="button" class="text-tool" data-angle="0" aria-pressed="true">روبه‌رو <span dir="ltr">۰°</span></button>
+            <button type="button" class="text-tool" data-angle="90" aria-pressed="false">نیم‌رخ <span dir="ltr">۹۰°</span></button>
+            <button type="button" class="text-tool" data-angle="180" aria-pressed="false">پشت <span dir="ltr">۱۸۰°</span></button>
+            <button type="button" class="text-tool turn-play" id="play-turn" aria-pressed="false"><i data-icon="rotate"></i><span>پخش چرخش</span></button>
+          </div>
           <div class="orbit-angle">
             <label for="orbit-angle">زاویهٔ دید</label>
             <input type="range" id="orbit-angle" min="-180" max="180" value="0" dir="ltr">
@@ -87,18 +97,24 @@
               <option value="fit">تن‌خور</option>
               <option value="body">مش بدن</option>
               <option value="strain">کشش پارچه</option>
+              <option value="contact">نقشهٔ تماس</option>
             </select>
             <button type="button" id="export-body" class="text-tool"><i data-icon="cube"></i> دریافت مش OBJ</button>
           </div>
           <p id="strain-key" class="strain-key" hidden>فیروزه‌ای کشش کم · کهربایی متوسط · سرخ زیاد</p>
+          <p id="contact-key" class="strain-key" hidden>فیروزه‌ای نزدیک بدن · خاکستری آزاد · سرخ نفوذ به مش</p>
         </div>
         <section class="inspector" id="inspector" aria-labelledby="inspector-title" hidden>
-          <div class="inspector-head"><h2 id="inspector-title">عیب‌یابی آینه</h2><button type="button" id="export-diagnostics" class="text-tool">گزارش فنی</button></div>
+          <div class="inspector-head"><h2 id="inspector-title">عیب‌یابی تشخیص و تن‌خور</h2><button type="button" id="export-diagnostics" class="text-tool">گزارش فنی</button></div>
           <dl>
             <div><dt>اتصال</dt><dd id="fit-health">—</dd></div>
             <div><dt>نقاط مرجع</dt><dd id="fit-anchor">—</dd></div>
             <div><dt>امتیاز تشخیص</dt><dd id="fit-score">—</dd></div>
             <div><dt>زاویهٔ بدن یا سر</dt><dd id="fit-yaw" dir="ltr">—</dd></div>
+            <div><dt>جهت و اطمینان</dt><dd id="fit-facing">—</dd></div>
+            <div><dt>خطای تصویر شانه</dt><dd id="fit-reprojection">—</dd></div>
+            <div><dt>مثلث‌های لباس</dt><dd id="fit-garment-mesh">—</dd></div>
+            <div><dt>نفوذ باقی‌مانده</dt><dd id="fit-residual">—</dd></div>
             <div><dt>ماسک بدن</dt><dd id="fit-mask">—</dd></div>
             <div><dt>آستین‌ها</dt><dd id="fit-arms">—</dd></div>
             <div><dt>زمان تشخیص</dt><dd id="fit-speed" dir="ltr">—</dd></div>
@@ -145,7 +161,7 @@
     </div>
     <footer class="foot">
       <span><i data-icon="shield"></i> تصویر و اندازه‌ها روی دستگاهت پردازش می‌شوند</span>
-      <a href="https://github.com/prestigegitserp/VFR_base/tree/v6" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۶</a>
+      <a href="https://github.com/prestigegitserp/VFR_base/tree/v7" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۷</a>
     </footer>
   </main>
 

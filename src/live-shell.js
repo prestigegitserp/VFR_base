@@ -4,6 +4,7 @@ import { bodyRing } from './body-volume.js';
 import { materials } from './wear.js';
 import { perimeter, shapeSections } from './body-shape.js';
 import { DrapeSolver } from './drape-solver.js';
+import { GarmentSurface } from './garment-surface.js';
 
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
 const tau = Math.PI * 2;
@@ -120,7 +121,7 @@ export function makeLiveShell(item, size, color) {
   const length = measures.length * .001;
   const segments = distanceRows(item, length);
   const cloth = materials(item.fabric, item.colors[color]?.value ?? item.colors[0].value);
-  cloth.main.bumpScale *= 1.8;
+  cloth.main.normalScale.multiplyScalar(1.10);
   cloth.main.specularIntensity = item.fabric === 'satin' ? .71 : .37;
   cloth.main.vertexColors = true;
   const group = new T.Group();
@@ -162,14 +163,33 @@ export function makeLiveShell(item, size, color) {
 
   const geometry = skinGeometry(count, indices, uv);
   geometry.setAttribute('color', new T.Float32BufferAttribute(shade, 3));
-  const shell = new T.Mesh(geometry, cloth.main);
-  shell.name = 'Joined torso and sleeve pattern';
+  const surface = new GarmentSurface(geometry, fabric.thickness);
+  const shell = new T.Mesh(surface.geometry, [cloth.main,cloth.lining]);
+  shell.name = 'Curved garment surface and finished boundaries';
   shell.frustumCulled = false;
+  shell.castShadow=shell.receiveShadow=true;
   group.add(shell);
   const positions = geometry.attributes.position;
   const reference = referenceBody(item, measures);
   const strainMaterial = new T.MeshStandardMaterial({ color: '#ffffff', roughness: .83, vertexColors: true, side: T.DoubleSide });
   const cords = [];
+  const seam = (name,start,end,radius,path) => cords.push({
+    draw:makeCord(group,cloth.edge,radius,37,name),
+    path:(_,sample)=>Array.from({length:37},(_,i)=>{
+      const t=i/36;
+      return sample(path(t),mix(start,end,t),.0039);
+    }),
+  });
+  if(!skirt&&!dress){
+    seam('Back center seam',.092,length-.023,.00125,t=>Math.PI+.008*Math.sin(Math.PI*t));
+    seam('Back yoke',.119,.119,.00135,t=>Math.PI+(t-.5)*1.81);
+  }
+  if(skirt||knit||zipped)seam('Double hem stitch',length-.017,length-.017,.00130,t=>t*tau);
+  if(sleeves)for(const hole of holes){
+    const n=hole.vertices.length, cuff=hole.offset+(cuffRows-1)*n;
+    const binding=makeCord(group,cloth.lapel,knit?.00335:.00240,n+1,'Turned sleeve binding');
+    cords.push({draw:binding,path:()=>Array.from({length:n+1},(_,i)=>V().fromBufferAttribute(positions,cuff+i%n))});
+  }
   const closed = !tailored && !dressCut;
   if (closed) cords.push({
     draw: makeCord(group, cloth.edge, knit ? .005 : .0032, 65, 'Rolled collar'),
@@ -354,7 +374,7 @@ export function makeLiveShell(item, size, color) {
   const solver = new DrapeSolver(geometry.index.array, rest, geometry.attributes.uv.array, fabric, pins, bands, limits);
   const neutralColors = new Float32Array(shade);
   const low = new T.Color('#2a8e88'), mid = new T.Color('#e6ad62'), high = new T.Color('#bc4153');
-  let view = 'fit';
+  let view='fit',collider=null,lastInspection=-Infinity;
   function paint() {
     const colors = geometry.attributes.color;
     if (view === 'strain' && solver.stats) {
@@ -365,9 +385,20 @@ export function makeLiveShell(item, size, color) {
         else c.copy(mid).lerp(high, (t - .5) * 2);
         colors.setXYZ(i, c.r, c.g, c.b);
       }
-    } else colors.array.set(neutralColors);
+    } else if(view==='contact'&&solver.stats){
+      const t=solver.clearance, c=new T.Color(), slate=new T.Color('#626365');
+      for(let i=0;i<colors.count;i++){
+        const d=t[i];
+        if(d<-.002)c.copy(high);
+        else if(d<.012)c.copy(low);
+        else c.copy(low).lerp(slate,clamp((d-.012)*46,0,1));
+        colors.setXYZ(i,c.r,c.g,c.b);
+      }
+    }else colors.array.set(neutralColors);
     colors.needsUpdate = true;
+    surface.colors();
   }
+  surface.colors();
   function sample(a, drop, extra = 0) {
     const angle = (a / tau * columns + columns) % columns;
     const column = Math.floor(angle), u = angle - column;
@@ -389,13 +420,19 @@ export function makeLiveShell(item, size, color) {
   }
   function update(volume, localArms, time, dt, wind, origin, options = {}) {
     if (!volume) return;
+    collider=options.collider;
     shapeTarget(volume, localArms, targets, options.adjustment, options.skin);
     const result = solver.advance(targets, dt, options.collider, { gravity: options.gravity, quick: options.quick,
       settle: options.settle, wind });
     positions.array.set(result); positions.needsUpdate = true;
     geometry.computeVertexNormals();
+    surface.update();
     solver.stretch();
-    if (view === 'strain') paint();
+    if(view==='contact'||options.diagnose&&time-lastInspection>480){
+      solver.inspect(collider,view==='contact');
+      lastInspection=time;
+    }
+    if(view!=='fit')paint();
     cords.forEach(cord => cord.draw(cord.path(volume, sample)));
     buttons.forEach(({ m, d }) => m.position.copy(sample(zipped ? 0 : -.17, d, .004)));
     if (zipper) {
@@ -409,17 +446,20 @@ export function makeLiveShell(item, size, color) {
     }
   }
   return {
-    group, shell, holes, update, cuffRows,
-    stats: () => solver.stats,
-    reset: () => solver.reset(),
+    group, shell, cage:geometry, holes, update, cuffRows,
+    stats:()=>solver.stats?{...solver.stats,simulationTriangles:geometry.index.count/3,renderTriangles:surface.triangles}:null,
+    reset() { solver.reset();lastInspection=-Infinity; },
+    inspect:()=>solver.inspect(collider,true),
     view(mode) {
       if (view === mode) return;
       view = mode;
-      shell.material = mode === 'strain' ? strainMaterial : cloth.main;
+      if(mode==='contact')solver.inspect(collider,true);
+      shell.material=mode==='fit'?[cloth.main,cloth.lining]:[strainMaterial,strainMaterial];
       paint();
     },
     dispose() {
       group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+      geometry.dispose();
       new Set(Object.values(cloth)).forEach(m => m.dispose());
       strainMaterial.dispose();
     },

@@ -19,11 +19,41 @@ function smallMask(mask) {
   return { w,h,data };
 }
 
+function subjectCrop(mask, posture) {
+  if(!mask)return null;
+  const {w,h,data}=mask;
+  const rows=new Uint16Array(h),cols=new Uint16Array(w);
+  const seed=posture?.[11]?.visibility>.4&&posture?.[12]?.visibility>.4 ? (posture[11].x+posture[12].x)*.5 : null;
+  let total=0;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    if(!data[y*w+x]||seed!=null&&Math.abs((x+.5)/w-seed)>.39)continue;
+    cols[x]++;rows[y]++;total++;
+  }
+  if(total<w*h*.035)return null;
+  const limit=(a,edge)=>{
+    const target=total*edge;
+    let i=0,n=0;
+    while(i<a.length-1&&n+a[i]<target)n+=a[i++];
+    return i/a.length;
+  };
+  const left=limit(cols,.023),right=limit(cols,.977),top=limit(rows,.012),bottom=limit(rows,.984);
+  if(right-left<.11||bottom-top<.19)return null;
+  const sx=Math.max(.31,Math.min(1,(right-left)*1.37));
+  const sy=Math.max(.42,Math.min(1,(bottom-top)*1.19+.12));
+  return {x:Math.max(-.08,(left+right-sx)*.5),y:Math.max(-.075,top-(sy-(bottom-top))*.24),sx,sy};
+}
+
+const shoulderQuality=pose=> {
+  const a=pose?.[11],b=pose?.[12];
+  return a&&b ? Math.min(a.visibility??0,b.visibility??0)*.70+Math.max(a.visibility??0,b.visibility??0)*.30 : 0;
+};
+
 export class VisionCore {
   constructor(root) {
     this.root = root;
     this.model = new Map();
     this.running = new Map();
+    this.cropSurface=null;this.lastCrop=-Infinity;
   }
   async task(key,runningMode) {
     if(!this.model.has(key)){
@@ -82,9 +112,9 @@ export class VisionCore {
         face=output.faceLandmarks[0]??null;
       }catch(e){underlyingError=e.message;}
     }
-    const poseMs=performance.now()-now;
+    let poseMs=performance.now()-now;
     let maskMs=0;
-    if(masks || mode==='upper'&&fallback&&missingShoulders){
+    if(masks || mode!=='face'&&fallback&&missingShoulders){
       const started=performance.now();
       try{
         const s=(await this.task('mask',method)).task;
@@ -94,7 +124,33 @@ export class VisionCore {
       }catch(e){underlyingError=e.message;}
       maskMs=performance.now()-started;
     }
-    return {pose,world,face,mask,headAttempted,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
+    let recovery=false;
+    const crop=mode!=='face'&&(method==='IMAGE'||time-this.lastCrop>700)&&shoulderQuality(pose)<.49?subjectCrop(mask,pose):null;
+    if(crop){
+      const started=performance.now();
+      this.lastCrop=time;
+      try{
+        const detector=await this.task('pose','IMAGE');
+        const target=this.cropSurface??=canvas();
+        const w=image.videoWidth??image.naturalWidth??image.width,h=image.videoHeight??image.naturalHeight??image.height;
+        const factor=Math.min(1,704/Math.max(w*crop.sx,h*crop.sy));
+        target.width=Math.round(w*crop.sx*factor);
+        target.height=Math.round(h*crop.sy*factor);
+        const ctx=target.getContext('2d');
+        ctx.fillStyle='#343739';ctx.fillRect(0,0,target.width,target.height);
+        ctx.drawImage(image,-crop.x*w*factor,-crop.y*h*factor,w*factor,h*factor);
+        const result=detector.task.detect(target);
+        const candidate=result.landmarks[0];
+        if(shoulderQuality(candidate)>Math.max(.34,shoulderQuality(pose)+.075)){
+          pose=candidate.map(point=>({...point,x:crop.x+point.x*crop.sx,y:crop.y+point.y*crop.sy,z:point.z*crop.sx}));
+          world=result.worldLandmarks[0]??null;
+          recovery=true;
+        }
+        result.close();
+      }catch(e){underlyingError ||= e.message;}
+      poseMs+=performance.now()-started;
+    }
+    return {pose,world,face,mask,recovery,headAttempted,delegate:primary.delegate,timeMs:performance.now()-now,poseMs,maskMs,underlyingError};
   }
   close() {
     for(const p of this.model.values())p.then(({task})=>task.close()).catch(()=>{});

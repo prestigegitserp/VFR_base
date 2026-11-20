@@ -1,0 +1,61 @@
+name: Validate VFR Atelier v7
+
+on:
+  push:
+    branches: [v7]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vfr-atelier-v7-validation
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run stage:models
+      - run: npm run build
+      - run: npx playwright install --only-shell chromium
+      - name: Test 180-degree views, rear fitting, fabric contact and moving camera
+        env:
+          VFR_BROWSER_SHOTS: '1'
+        run: |
+          mkdir -p .render
+          curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/pose.jpg -o .render/pose.jpg
+          curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/portrait.jpg -o .render/portrait.jpg
+          curl -fLsS --retry 2 'https://upload.wikimedia.org/wikipedia/commons/9/94/Back_View_of_the_SeV_Expedition_Scottevest.jpg' -o .render/rear.jpg
+          node tests/y4m-fixture.mjs .render/pose.jpg .render/camera.y4m
+          node tests/browser.mjs .render/pose.jpg .render/portrait.jpg .render/camera.y4m .render/rear.jpg
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vfr-v7-visual-check
+          path: |
+            .render/pro-upper.jpg
+            .render/pro-orion.jpg
+            .render/pro-near.jpg
+            .render/pro-orbit.jpg
+            .render/pro-skin.jpg
+            .render/pro-strain.jpg
+            .render/pro-contact.jpg
+            .render/pro-mannequin-rear.jpg
+            .render/pro-rear-photo.jpg
+            .render/pro-person-rear.jpg
+            .render/pro-glasses.jpg
+            .render/pro-near-live.jpg
+            .render/pro-glasses-live.jpg
+            .render/pro-near-blocked.jpg
+          retention-days: 3
+          if-no-files-found: ignore

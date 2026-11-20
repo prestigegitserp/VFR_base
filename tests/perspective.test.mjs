@@ -5,6 +5,7 @@ import { projection, referencePoints, solveHead } from '../src/camera-fit.js';
 import { solveBody } from '../src/body-volume.js';
 import { BodyMesh } from '../src/body-mesh.js';
 import { TwoViewScan } from '../src/sizing.js';
+import { TurnSequence, wrap } from '../src/body-heading.js';
 import { makeLiveShell } from '../src/live-shell.js';
 import { subjectMask } from '../src/subject-mask.js';
 import { FittedStage } from '../src/fitted-stage.js';
@@ -43,8 +44,9 @@ test('perspective face fit recovers a turned head and ignores iris gaze',()=>{
 
 function seatedFixture(){
   const pose=Array.from({length:33},()=>({x:.5,y:.65,z:0,visibility:0}));
-  for(const [i,x,y,z] of [[0,.508,.49,-.17],[11,.30,.68,.02],[12,.70,.635,-.044],[13,.28,.85,-.025],
-    [14,.74,.817,-.12],[15,.38,.972,-.11],[16,.59,.802,-.245],[19,.40,.971,-.116],[20,.54,.78,-.249]]){
+
+  for(const [i,x,y,z] of [[0,.508,.49,-.17],[12,.30,.68,.02],[11,.70,.635,-.044],[14,.28,.85,-.025],
+    [13,.74,.817,-.12],[16,.38,.972,-.11],[15,.59,.802,-.245],[20,.40,.971,-.116],[19,.54,.78,-.249]]){
     pose[i]={x,y,z,visibility:.97};
   }
   const mask={w:160,h:90,data:new Uint8Array(160*90)};
@@ -65,7 +67,7 @@ test('seated near-camera fit measures shoulders and keeps neckline behind a forw
   assert.ok(rig.volume.topCount>=1);
   assert.ok(rig.volume.ridges.some(ridge=>ridge.length>=3));
   assert.ok(rig.volume.neck.joint.distanceTo(rig.volume.neck.center)<rig.volume.width*.47);
-  const joint=camera.pixel(fixture.pose[16]), fitted=camera.screen(rig.arms[1][2]);
+  const joint=camera.pixel(fixture.pose[15]), fitted=camera.screen(rig.arms[1][2]);
   assert.ok(Math.hypot(joint.x-fitted.x,joint.y-fitted.y)<.01);
   const local=p=>p.clone().sub(rig.origin).applyQuaternion(rig.q.clone().invert());
   assert.ok(Math.abs(rig.volume.neck.center.x)<.039);
@@ -86,7 +88,11 @@ test('the garment sockets share edges with the sleeves and the cuffs follow a be
   const item=catalog.find(x=>x.id==='orion'), shell=makeLiveShell(item,startingSize(item),0);
   const local=p=>p.clone().sub(rig.origin).applyQuaternion(rig.q.clone().invert());
   shell.update(rig.volume,rig.arms.map(a=>a.map(local)),0,1/30,false,rig.origin);
-  const geometry=shell.shell.geometry, pos=geometry.attributes.position;
+  const geometry=shell.cage, pos=geometry.attributes.position;
+  const surface=shell.shell.geometry;
+  assert.ok(surface.index.count>=4*geometry.index.count);
+  assert.ok(surface.groups[1].count>0);
+  assert.ok(surface.attributes.position.array.every(Number.isFinite));
   assert.ok(pos.array.every(Number.isFinite));
   const touches=new Map(), arr=geometry.index.array;
   const key=(a,b)=>a<b?a+':'+b:b+':'+a;
@@ -150,8 +156,8 @@ function reconstruct(rig) {
 test('the exported body has a closed, oriented skin with welded torso, arms and pelvis', () => {
   const upper = seatedFixture();
   const full = { pose: upper.pose.map(p=>({...p,x:.5+(p.x-.5)*.46,y:.19+(p.y-.46)*.53})), head:null };
-  for(const [i,x,y,z] of [[23,.457,.476,.015],[24,.543,.475,-.019],[25,.453,.680,.021],
-    [26,.547,.685,-.02],[27,.446,.897,.044],[28,.565,.90,.067]]) {
+  for(const [i,x,y,z] of [[24,.457,.476,.015],[23,.543,.475,-.019],[26,.453,.680,.021],
+    [25,.547,.685,-.02],[28,.446,.897,.044],[27,.565,.90,.067]]) {
     full.pose[i]={x,y,z,visibility:.96};
   }
   for (const [mode,fixture] of [['upper',upper],['full',full]]) {
@@ -220,13 +226,13 @@ test('body contact resolves penetration of a fitted garment and size changes ret
   const circumference = [];
   for (const cloth of sizes) {
     cloth.update(rig.volume,arms,0,1/30,false,rig.origin,{ quick:true, collider:body.collider, skin:body });
-    const index = new Set(cloth.shell.geometry.index.array);
-    const vertices = cloth.shell.geometry.attributes.position;
+    const index = new Set(cloth.cage.index.array);
+    const vertices = cloth.cage.attributes.position;
     const inside = [...index].map(i=>body.collider.distance(vertices.getX(i),vertices.getY(i),vertices.getZ(i)))
       .filter(d=>d<-.009);
     const report = cloth.stats();
     assert.equal(inside.length,0,`${cloth===sizes[0]?'small':'large'}: ${inside.length}/${index.size}; min ${Math.min(...inside)}`);
-    const faces=cloth.shell.geometry.index.array;
+    const faces=cloth.cage.index.array;
     const midpoint=V(), vertex=V();
     let intersections=0;
     for(let i=0;i<faces.length;i+=3){
@@ -276,4 +282,72 @@ test('calibration collects frontal width and profile depth from actual silhouett
   assert.equal(body.shape.sections.length,10);
   assert.ok(body.shape.sections.every(s=>s.rx>.30/2 && s.rz>.16/2 && s.rz<s.rx*.76));
   assert.ok(body.shape.length>.35 && body.shape.length<.72);
+});
+
+function turningSubject(angle, partiallyCovered=false) {
+  const q=new T.Quaternion().setFromAxisAngle(V(0,1,0),angle);
+  const joints=new Map([
+    [0,V(0,.20,.105)], [12,V(-.209,0,0)], [11,V(.209,0,0)],
+    [24,V(-.142,-.445,-.013)], [23,V(.142,-.445,-.013)],
+    [14,V(-.237,-.275,.026)],[13,V(.238,-.268,.026)],
+    [16,V(-.23,-.554,.057)],[15,V(.226,-.561,.038)],
+    [20,V(-.23,-.624,.064)],[19,V(.226,-.633,.043)],
+    [26,V(-.141,-.846,.019)],[25,V(.141,-.849,.023)],
+    [28,V(-.139,-1.276,.009)],[27,V(.140,-1.276,.010)],
+  ]);
+  const p=Array.from({length:33},()=>({x:.5,y:.5,z:0,visibility:0}));
+  const w=Array(33).fill(null), origin=V(.005,.39,-2.95);
+  for(const [index,point] of joints){
+    const world=point.clone().applyQuaternion(q);
+    const pixel=camera.image(world.clone().add(origin));
+    const visibility=partiallyCovered&&[11,13,15,19].includes(index)?.16:.98;
+    p[index]={...pixel,z:-world.z*camera.focal/(camera.rect.w*-origin.z),visibility};
+    w[index]={x:world.x,y:-world.y,z:-world.z,visibility};
+  }
+  return {pose:p,world:w};
+}
+
+test('tracked person can rotate through both profiles to the back with a partially hidden shoulder',()=>{
+  for(const sign of [1,-1]){
+    const history={}, turn=new TurnSequence(), results=[];
+    for(let i=0;i<=24;i++){
+      const angle=sign*Math.min(Math.PI,i*Math.PI/20);
+      const hidden=i>=8&&i<=12;
+      const input={...turningSubject(angle,hidden),at:95*(i+1),shapeHistory:history};
+      const rig=solveBody(input,'full',camera,null);
+      assert.ok(rig,`lost at ${i}`);
+      const bodyAngle=Math.atan2(...(()=>{
+        const f=V(0,0,1).applyQuaternion(rig.q);return [f.x,f.z];
+      })());
+      assert.ok(Math.abs(wrap(bodyAngle-angle))<.31,`${i}: ${bodyAngle} vs ${angle}`);
+      assert.ok(Math.abs(rig.depth-2.95)<.66,`depth at ${i}: ${rig.depth}`);
+      assert.ok(V(0,1,0).applyQuaternion(rig.q).y>.89,'upright, including back');
+      if(i>=20)assert.equal(rig.view,'back');
+      if(hidden)assert.equal(rig.anchors[1],false);
+      turn.ingest(rig,input.at);
+      results.push(rig.view);
+    }
+    assert.equal(turn.index,3);
+    assert.deepEqual(turn.samples.map(p=>p.view),['front','side','back']);
+    assert.ok(results.includes('side'));
+  }
+});
+
+test('a rear photo starts with the correct side of the shell without a prior front frame',()=>{
+  const rig=solveBody(turningSubject(Math.PI),'full',camera,null);
+  assert.equal(rig.view,'back');
+  assert.ok(rig.shoulder[0].x>rig.shoulder[1].x);
+  assert.ok(V(0,0,1).applyQuaternion(rig.q).z<-.97);
+  const scene=new T.Scene(),stage=new FittedStage(scene);
+  const item=catalog.find(x=>x.id==='orion');
+  stage.prepare(item,startingSize(item),0);
+  const args={rig,mirror:false,adjustment:{x:0,y:0,width:0,length:0,depth:0},width:view.w,height:view.h,time:0,dt:1/30,breeze:false,quick:true};
+  const front=stage.update({...args,orbit:0}).position.clone();
+  const back=stage.update({...args,orbit:180}).position.clone();
+  assert.ok(front.z<rig.origin.z&&back.z>rig.origin.z);
+  assert.ok(stage.report().renderTriangles>19_000);
+  stage.product.view('contact');
+  const sample=stage.product.inspect();
+  assert.ok(sample.testedFaces>4_800&&sample.testedVertices>2_000);
+  stage.clear();
 });

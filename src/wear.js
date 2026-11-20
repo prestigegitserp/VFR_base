@@ -11,26 +11,36 @@ const textureCache = new Map();
 function textile(name) {
   if (typeof document === 'undefined') return null;
   if (textureCache.has(name)) return textureCache.get(name);
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 192;
-  const ctx = canvas.getContext('2d');
-  const image = ctx.createImageData(192,192);
-  let seed = 127977;
-  const style = fabrics[name].thread;
-  for (let y=0;y<192;y++) for (let x=0;x<192;x++) {
-    seed = (Math.imul(seed,1664525)+1013904223)>>>0;
-    const noise = (seed / 4294967296 - .5) * (style==='grain' ? 76 : 31);
-    const weave = style==='rib' ? 38 * Math.cos(x*tau/12) + 8*Math.sin(y*tau/3) :
-      style==='diagonal' ? 25 * Math.cos((x+y)*tau/7) + 7*Math.cos(x*tau/3) :
-        style==='fine' ? 15*Math.cos(x*tau/5) + 9*Math.cos(y*tau/3) : 9*Math.cos((x+y)*tau/7);
-    const i = (y*192+x)*4;
-    image.data.set([128+weave+noise,128+weave+noise,128+weave+noise,255], i);
+  const side=192, canvas=document.createElement('canvas');
+  canvas.width=canvas.height=side;
+  const ctx=canvas.getContext('2d'), image=ctx.createImageData(side,side);
+  const field=new Float32Array(side*side), style=fabrics[name].thread;
+  let seed=127977;
+  for(let y=0;y<side;y++)for(let x=0;x<side;x++){
+    seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+    const noise=(seed/4294967296-.5)*(style==='grain'?.39:.095);
+    const warp=Math.cos((x+.18*Math.sin(y*tau/12))*tau/6);
+    const weft=Math.cos(y*tau/6);
+    const crossover=(1+Math.sin((x+y)*tau/12))*.5;
+    const weave=style==='rib'?.82*Math.cos(x*tau/12)+weft*.24:
+      style==='diagonal'?.41*Math.cos((x+y)*tau/8)+warp*.22+weft*.18:
+      style==='grain'?.32*warp*weft:.34*(warp*crossover+weft*(1-crossover));
+    field[y*side+x]=weave+noise;
+  }
+  const normalDepth=style==='grain'?.54:style==='rib'?.81:.67;
+  for(let y=0;y<side;y++)for(let x=0;x<side;x++){
+    const i=(y*side+x)*4;
+    const dx=(field[y*side+(x+1)%side]-field[y*side+(x+side-1)%side])*normalDepth;
+    const dy=(field[((y+1)%side)*side+x]-field[((y+side-1)%side)*side+x])*normalDepth;
+    const scale=1/Math.hypot(dx,dy,1);
+    image.data[i]=(dx*scale+1)*127.5;image.data[i+1]=(dy*scale+1)*127.5;
+    image.data[i+2]=(scale+1)*127.5;image.data[i+3]=255;
   }
   ctx.putImageData(image,0,0);
-  const t = new T.CanvasTexture(canvas);
-  t.wrapS = t.wrapT = T.RepeatWrapping;
-  t.repeat.set(style==='rib'? 7 : 13, 10);
-  t.anisotropy = 8;
+  const t=new T.CanvasTexture(canvas);
+  t.wrapS=t.wrapT=T.RepeatWrapping;
+  t.repeat.set(style==='rib'?7:12,9);
+  t.anisotropy=8;
   textureCache.set(name,t);
   return t;
 }
@@ -41,7 +51,8 @@ export function materials(style, color) {
   const main = new T.MeshPhysicalMaterial({
     color: dye, side: T.DoubleSide, roughness: description.roughness,
     sheen: description.sheen, sheenRoughness: .65, sheenColor: dye.clone().lerp(new T.Color('#efe2cf'), .45),
-    bumpMap: textile(style), bumpScale: description.thickness * 1.55, specularIntensity: style==='satin'? .78 : .45,
+    normalMap:textile(style),normalScale:new T.Vector2(style==='satin'?.25:.63,style==='satin'?.25:.63),
+    specularIntensity:style==='satin'?.78:.45,
   });
   const lapel = main.clone(); lapel.color.multiplyScalar(.84);
   const lining = main.clone(); lining.color.multiplyScalar(.69);

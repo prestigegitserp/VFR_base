@@ -2,6 +2,7 @@ import * as T from 'three';
 import { clamp } from './catalog.js';
 import { headJoint, rescaleHead } from './camera-fit.js';
 import { levels, shapeSections } from './body-shape.js';
+import { anatomy, bodyView, solveHeading } from './body-heading.js';
 
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
 const mix = (a, b, t) => a + (b - a) * t;
@@ -9,7 +10,7 @@ const center = (a, b) => a.clone().lerp(b, .5);
 const finite = p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
 const visible = (p, c = .52, margin = .05) => finite(p) && (p.visibility ?? 1) >= c &&
   p.x >= -margin && p.x <= 1 + margin && p.y >= -margin && p.y <= 1 + margin;
-const sides = [[11, 13, 15, 19, 23, 25, 27], [12, 14, 16, 20, 24, 26, 28]];
+
 const clothed = label => label === 2 || label === 4;
 
 function readMask(mask, shift = { x: 0, y: 0 }) {
@@ -93,18 +94,32 @@ function shoulderOutline(read, mask, p, middle, vertical) {
   return outline.length >= 3 ? outline : [];
 }
 
-function axes(shoulders, hips) {
-  const side = shoulders[1].clone().sub(shoulders[0]).normalize();
-  const across = V(side.x, side.y).normalize();
-  const lifted = V(-across.y, across.x, 0);
+function axes(side, shoulders, hips) {
+  const lifted = V(0, 1, 0);
   if (hips) {
     const torso = center(...shoulders).sub(center(...hips));
-    torso.z = clamp(torso.z, -.18, .18);
-    lifted.lerp(torso.normalize(), .58);
+    torso.z = clamp(torso.z, -.22, .22);
+    lifted.lerp(torso.normalize(), .62);
   }
   const forward = V().crossVectors(side, lifted).normalize();
   const up = V().crossVectors(forward, side).normalize();
-  return { side, up, forward, q: new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(side, up, forward)) };
+  return { side, up, forward, q:new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(side,up,forward)) };
+}
+
+function bodyDepth(points, hips, width, heading, camera, previous, head, scale) {
+  const c=Math.abs(Math.cos(heading)), s=Math.abs(Math.sin(heading));
+  const span=Math.abs(points[1].x-points[0].x);
+  const mid=(points[0].y+points[1].y)*.5;
+  const shoulder=c>.26&&span>.022 ? camera.focal*width*c/(span*camera.rect.w) : 0;
+  const torsoPixels=hips ? ((hips[0].y+hips[1].y)*.5-mid)*camera.rect.h : 0;
+  const torso=torsoPixels>28 ? camera.focal*scale/torsoPixels : 0;
+  let depth=shoulder || torso || previous || head?.depth || 1.28;
+  if (c<.69) {
+    const anchor=torso || previous || head?.depth;
+    if (anchor) depth=mix(depth,anchor,clamp((.72-c)*1.9,.10,1));
+  }
+  if (previous&&s>.58) depth=clamp(depth,previous*.80,previous*1.25);
+  return clamp(depth,.23,8);
 }
 
 function attachHead(head, ideal, depth, width) {
@@ -135,63 +150,84 @@ function trackedBone(parent, prior, image, guess, length, camera, strength) {
 }
 
 export function solveBody(input, mode, camera, head, profile) {
-  const { pose, world, face, mask, maskShift, shapeHistory } = input;
+  const { pose, world, face, mask, maskShift, shapeHistory, at } = input;
   const read = readMask(mask, maskShift);
   const aspect = camera.rect.w / camera.rect.h;
-  let shoulders2d = sides.map(ids => pose?.[ids[0]]);
-  const poseStable = shoulders2d.every(p => visible(p, .47, .075));
-  const estimated = !poseStable;
+  const indices=anatomy;
+  let points=indices.map(([s])=>pose?.[s]);
+  const strong=points.map(p=>visible(p,.48,.085));
+  const supported=points.map(p=>visible(p,shapeHistory?.heading?.reliability>.43?.095:.23,.16));
+  const history=shapeHistory;
+  const heading=solveHeading(pose,world,face,history,at);
+  const partial=heading&&strong.some(Boolean)&&supported.every(Boolean);
+  const poseStable=strong.every(Boolean);
+  const estimated=!poseStable&&!partial;
   if (estimated) {
-    if (mode !== 'upper') return null;
-    shoulders2d = seatedFallback(face, read, mask, aspect);
-    if (!shoulders2d) return null;
+    if (mode!=='upper') return null;
+    const recovered=seatedFallback(face,read,mask,aspect);
+    if (!recovered) return null;
+    points=recovered;
   }
-  const order = shoulders2d[0].x < shoulders2d[1].x ? [0, 1] : [1, 0];
-  const points = order.map(i => shoulders2d[i]);
-  const indices = order.map(i => sides[i]);
-  const span = points[1].x - points[0].x;
-  const vertical = span * aspect;
-  const meanZ = (points[0].z + points[1].z) * .5;
-  if (span < .059 || Math.abs(points[0].y - points[1].y) > vertical * .61) return null;
-  const pixels = Math.hypot(span * camera.rect.w, (points[1].y - points[0].y) * camera.rect.h);
-  const recorded = profile?.measures?.shoulder?.value;
-  const estimatedMeters = world?.[11] && world?.[12] && Math.hypot(
-    world[11].x - world[12].x, world[11].y - world[12].y, world[11].z - world[12].z);
-  const observedScale = Number.isFinite(estimatedMeters) && estimatedMeters > .26 && estimatedMeters < .64;
-  const width = clamp(recorded ? recorded * .001 : observedScale && poseStable ? mix(.419, estimatedMeters, .58) : .419, .26, .62);
-  const worldShoulders = indices.map(([s]) => world?.[s]);
-  const worldValid = poseStable && worldShoulders.every(finite);
-  const modelSpan = worldValid ? Math.hypot(worldShoulders[1].x - worldShoulders[0].x, worldShoulders[1].y - worldShoulders[0].y) : width;
-  const poseYaw = worldValid ? Math.atan2(worldShoulders[0].z - worldShoulders[1].z, Math.max(.085, modelSpan)) : null;
-  const imageYaw = Math.atan2((points[0].z - points[1].z) * .82, span);
-  const yawGuess = clamp(poseYaw == null ? imageYaw : mix(imageYaw, poseYaw, .63), -.94, .94);
-  const depth = clamp(camera.focal * width * Math.cos(yawGuess) / pixels, .24, 7.5);
-  const endDepth = width * Math.sin(yawGuess) * .5;
-  const shoulder = [camera.ray(points[0], Math.max(.15, depth + endDepth)), camera.ray(points[1], Math.max(.15, depth - endDepth))];
-  const origin = center(...shoulder);
-  const scale = worldValid ? clamp(width / Math.max(.18, Math.hypot(modelSpan, worldShoulders[0].z - worldShoulders[1].z)), .61, 1.47) : 1;
-  const worldZ = worldValid ? (worldShoulders[0].z + worldShoulders[1].z) * .5 : 0;
-  const real = index => {
-    const p = pose[index];
-    const zoom = camera.rect.w * depth / camera.focal;
-    const imageDepth = (p.z - meanZ) * zoom * .68;
-    const modelDepth = finite(world?.[index]) && worldValid ? (world[index].z - worldZ) * scale : imageDepth;
-    return camera.ray(p, clamp(depth + clamp(mix(imageDepth, modelDepth, .57), -width * 1.52, width * 1.58), .13, 8));
+  const yawGuess=estimated ? clamp((head?.yaw??0)*.31,-.5,.5) : heading?.angle??0;
+  const halfTurn=bodyView(yawGuess);
+  const recorded=profile?.measures?.shoulder?.value;
+  const worldShoulders=indices.map(([s])=>world?.[s]);
+  const worldValid=!estimated&&worldShoulders.every(finite);
+  const estimatedMeters=worldValid ? V(worldShoulders[0].x,worldShoulders[0].y,worldShoulders[0].z)
+    .distanceTo(V(worldShoulders[1].x,worldShoulders[1].y,worldShoulders[1].z)) : null;
+  const observedScale=estimatedMeters>.26 && estimatedMeters<.64;
+  let width=clamp(recorded ? recorded*.001 : observedScale ? mix(.419,estimatedMeters,.51) : .419,.265,.62);
+  if(!recorded&&history?.width)width=mix(history.width,width,halfTurn==='side'?.09:.30);
+  if(history)history.width=width;
+  const calibration=shapeSections(width,profile);
+  const hipPoints=estimated?null:indices.map(s=>pose?.[s[4]]);
+  const hipEvidence=hipPoints?.every(p=>visible(p,.34,.10)) ? hipPoints : null;
+  const stature=(profile?.measures?.height?.value??0)*.001;
+  const nominal=calibration.length??(stature?stature*.247:width*1.07);
+  const depth=bodyDepth(points,hipEvidence,width,yawGuess,camera,history?.depth,head,nominal);
+  const span=Math.max(.035,Math.abs(points[1].x-points[0].x),width*camera.focal/(depth*camera.rect.w)*.59);
+  const vertical=width*camera.focal/(depth*camera.rect.h);
+  const meanZ=(points[0].z+points[1].z)*.5;
+  const endDepth=width*Math.sin(yawGuess)*.5;
+  const measured=points.map((p,i)=>camera.ray(p,Math.max(.15,depth+(i?1:-1)*endDepth)));
+  const tilt=clamp((measured[1].y-measured[0].y)/width,-.35,.35);
+  const side=V(Math.cos(yawGuess),tilt,-Math.sin(yawGuess)).normalize();
+  const proposals=measured.map((p,i)=>p.clone().addScaledVector(side,(i?-.5:.5)*width));
+  const likelihood=strong[0]===strong[1] ? .5 : strong[0] ? .15 : .85;
+  const origin=proposals[0].lerp(proposals[1],likelihood);
+  const shoulder=[origin.clone().addScaledVector(side,-width*.5),origin.clone().addScaledVector(side,width*.5)];
+  const err=points.reduce((n,p,i)=>{
+    const a=camera.screen(shoulder[i]),b=camera.pixel(p);
+    return n+(strong[i]?Math.hypot(a.x-b.x,a.y-b.y)*.5:0);
+  },0);
+  if(history)history.depth=depth;
+  const metricScale=worldValid?clamp(width/Math.max(.18,estimatedMeters),.61,1.47):1;
+  const worldZ=worldValid?(worldShoulders[0].z+worldShoulders[1].z)*.5:0;
+  const real=index=>{
+    const p=pose[index];
+    const zoom=camera.rect.w*depth/camera.focal;
+    const imageDepth=(p.z-meanZ)*zoom*.68;
+    const modelDepth=finite(world?.[index])&&worldValid?(world[index].z-worldZ)*metricScale:imageDepth;
+    return camera.ray(p,clamp(depth+clamp(mix(imageDepth,modelDepth,.58),-width*1.50,width*1.63),.14,8.5));
   };
-  const hips = poseStable && indices.every(s => visible(pose[s[4]], .53) && pose[s[4]].y < .985) &&
-    pose[indices[0][4]].y - points[0].y > vertical * .44 ? indices.map(s => real(s[4])) : null;
-  if (mode === 'full' && !hips) return null;
-  const basis = axes(shoulder, hips);
-  const { q, up, forward, side } = basis;
+  let hips=hipEvidence&&((hipEvidence[0].y+hipEvidence[1].y-points[0].y-points[1].y)*.5>vertical*.41)
+    ? indices.map(s=>real(s[4])) : null;
+  if(mode==='full'&&!hips) {
+    if(!partial||!history?.hip) return null;
+    const offset=V(0,-nominal,0);
+    hips=shoulder.map(p=>p.clone().add(offset));
+  }
+  if(hips&&history)history.hip=true;
+  const basis=axes(side,shoulder,hips);
+  const { q, forward } = basis;
   const inverse = q.clone().invert();
   const local = p => p.clone().sub(origin).applyQuaternion(inverse);
   const worldAt = p => p.clone().applyQuaternion(q).add(origin);
   const middle = camera.image(origin);
   const hip = hips ? local(center(...hips)) : V(0, -width * 1.09, -.024);
-  const calibration = shapeSections(width, profile);
   const length = clamp(hips ? -hip.y : calibration.length ?? -hip.y, width * .74, width * 1.61);
 
-  const shoulderProfiles = points.map(p => topOfShoulder(read, mask, p, middle.x, vertical));
+  const shoulderProfiles=points.map((p,i)=>(estimated||strong[i])&&halfTurn!=='side' ? topOfShoulder(read,mask,p,middle.x,vertical) : null);
   const crowns = shoulder.map((p, i) => {
     const q = local(p);
     if (shoulderProfiles[i]) q.y = clamp(local(camera.ray(shoulderProfiles[i], -p.z)).y, .012, width * .24);
@@ -199,14 +235,14 @@ export function solveBody(input, mode, camera, head, profile) {
     return q;
   });
   const topCount = shoulderProfiles.filter(Boolean).length;
-  const ridges = points.map((p, i) => mode==='upper' ? shoulderOutline(read,mask,p,middle,vertical).map(u => {
+  const ridges = points.map((p, i) => mode==='upper'&&halfTurn==='front' ? shoulderOutline(read,mask,p,middle,vertical).map(u => {
     const onSurface = local(camera.ray(u, mix(depth, -shoulder[i].z, clamp(u.distance, 0, 1))));
     onSurface.y = clamp(onSurface.y, -.081, width * .31);
     return onSurface;
   }) : []);
-  const facial = head && Math.abs(head.faceCenter.x - middle.x) < span * .61 &&
+  const facial = head && halfTurn!=='back' && Math.abs(head.faceCenter.x - middle.x) < span * .75 &&
     head.faceCenter.y < middle.y + vertical * .12;
-  const faceDepth = poseStable && visible(pose?.[0], .46, .11) ? -real(0).z : depth - width * .18;
+  const faceDepth = !estimated && visible(pose?.[0], .46, .11) ? -real(0).z : depth - width * .18;
   const averageCrown = (crowns[0].y + crowns[1].y) * .5;
   const neck = {
     center: V(0, Math.max(.016, averageCrown + .014), -.017),
@@ -228,14 +264,17 @@ export function solveBody(input, mode, camera, head, profile) {
     if (!row || readings.length < 2) return { p };
     const zoom = camera.rect.w * -location.z / camera.focal;
     const yawScale = Math.hypot(side.x, side.z * .58);
-    const half = row.width * zoom / (2 * Math.max(.63, yawScale));
+    const projectedRadius=row.width*zoom*.5;
+    const half = projectedRadius / Math.max(.63, yawScale);
     const radius = clamp(half, width * .28, width * .61);
     const center = local(camera.ray({x:(row.left + row.right) * .5, y:projected.y}, -location.z));
     const spread = readings.at(-1).width - readings[0].width;
-    const weight = .93 * clamp(1 - 3.4 * spread / row.width, .22, 1)
-      * clamp(1 - Math.abs(yawGuess) * .83, .28, 1);
+    const weight = .93 * clamp(1 - 3.4 * spread / row.width, .22, 1);
+    const prior=history?.rings?.[levels.indexOf(t)]??calibration.rings[levels.indexOf(t)];
+    const orthogonal=Math.sin(yawGuess)**2;
+    const depthReading=orthogonal>.67 ? Math.sqrt(Math.max(0,projectedRadius**2-prior.rx**2*(1-orthogonal))/orthogonal) : null;
     p.x = mix(p.x, clamp(center.x, -.066, .066), weight * .36);
-    return { p, rx: radius, weight };
+    return {p,rx:radius,rz:depthReading?clamp(depthReading,width*.138,width*.372):null,weight:weight*(1-orthogonal*.86),depthWeight:weight*orthogonal};
   });
   const shape = shapeSections(width, profile, observations);
   const rings = shape.rings.map((ring, i) => {
@@ -243,7 +282,8 @@ export function solveBody(input, mode, camera, head, profile) {
     if (old && shape.source === 'image') {
       const w = observations[i].weight ? .22 : .046;
       ring.rx = mix(old.rx, ring.rx, w);
-      ring.rz = mix(old.rz, ring.rz, w);
+      const observed=observations[i];
+      ring.rz=observed.rz&&heading?.reliability>.52?mix(old.rz,observed.rz,observed.depthWeight*.135):mix(old.rz,ring.rz,.012);
     }
     const t = ring.t;
     // Separate the anterior chest and posterior back instead of symmetrizing both sides.
@@ -258,8 +298,8 @@ export function solveBody(input, mode, camera, head, profile) {
     const b = local(shoulder[i]);
     const direction = V(i ? .21 : -.21, -1, .06).normalize();
     const armLength = (profile?.measures?.sleeve?.value ?? 615) * .001;
-    const ec = poseStable && visible(pose[e], .42, .135) ? pose[e].visibility : 0;
-    const wc = poseStable && visible(pose[w], .42, .13) ? pose[w].visibility : 0;
+    const ec = !estimated && visible(pose[e], .42, .135) ? pose[e].visibility : 0;
+    const wc = !estimated && visible(pose[w], .42, .13) ? pose[w].visibility : 0;
     const upper = armLength * .525, lower = armLength * .475;
     const priorElbow = b.clone().addScaledVector(direction, upper);
     const strength = profile?.measures?.sleeve ? .72 : worldValid ? .48 : .24;
@@ -267,7 +307,7 @@ export function solveBody(input, mode, camera, head, profile) {
     const reach = elbow.clone().sub(b).normalize().lerp(direction, .60).normalize();
     const priorWrist = elbow.clone().addScaledVector(reach, lower);
     const estimate = wc && ec ? real(w) : null;
-    const raisedHand = estimate && local(estimate).z > width * .26;
+    const raisedHand = estimate && estimate.z-origin.z > width*.26;
     const wrist = estimate ? local(trackedBone(worldAt(elbow), worldAt(priorWrist), pose[w], estimate,
       lower, camera, raisedHand ? strength * .45 : strength * .8)) : priorWrist;
     armQuality.push(Math.min(ec || 0, wc || 0));
@@ -276,7 +316,7 @@ export function solveBody(input, mode, camera, head, profile) {
       const observed = visible(pose[h], .45, .078) ? local(real(h)) : wrist.clone().addScaledVector(reach, .046);
       const direction = observed.sub(wrist).clampLength(width * .069, width * .188);
       const palm = wrist.clone().add(direction);
-      const front = clamp((wrist.z - width * .088) / (width * .35), 0, 1);
+      const front = clamp((worldAt(wrist).z-origin.z-width*.086)/(width*.35),0,1);
       hands.push({ side:i, wrist, palm, front, radius: width * .062 });
       occluders.push({ elbow: pose[e], wrist: pose[w], hand: finite(pose[h]) ? pose[h] : pose[w], radius: span * .132, front });
     }
@@ -294,14 +334,15 @@ export function solveBody(input, mode, camera, head, profile) {
   }) : [null, null];
   const leg = legs.filter(Boolean);
   const projectedSide = camera.image(origin.clone().addScaledVector(side, width * .25));
-  const collar = worldAt(neck.center.clone().add(V(0, -.012, neck.rz)));
-  const quality = estimated ? .52 : clamp(.48 + (points[0].visibility + points[1].visibility) * .17 +
+  const collar = worldAt(neck.center.clone().add(V(0,-.012,halfTurn==='back'?-neck.rz:neck.rz)));
+  const quality = estimated ? .52 : clamp(.48 + ((points[0].visibility??1)+(points[1].visibility??1))*.17 +
     topCount * .036 + (hips ? .048 : 0) + (facial ? .044 : 0), 0, 1);
   return {
     kind: estimated ? 'estimate' : 'body', camera, origin, q, shoulder, hip: hips, arms, hands, leg, head: fittedHead,
-    full: leg.length === 2, depth, quality, armQuality, occluders, yaw: yawGuess, collar, span: width, screenSpan: span,
+    full: leg.length === 2, depth, quality, armQuality, occluders,yaw:yawGuess,view:halfTurn,headingReliability:estimated?.35:heading?.reliability??.43,
+    headingSource:estimated?'silhouette':heading?.source,shoulderError:err,anchors:strong,collar,span:width,screenSpan:span,
     screenCenter: middle, screenCollar: camera.image(collar), maskShift, imageRatio: aspect,
-    screenSlope: (projectedSide.y - middle.y) / Math.max(.002, projectedSide.x - middle.x),
+    screenSlope:Math.abs(projectedSide.x-middle.x)>.004?clamp((projectedSide.y-middle.y)/(projectedSide.x-middle.x),-1,1):0,
     sections: { chest: { center: worldAt(rings[3].center) }, waist: { center: worldAt(rings[6].center) },
       hip: { center: worldAt(rings.at(-1).center) } },
     volume: { width, length, neck, rings, crowns, ridges, topCount, profile, armRadii, source: shape.source, mode,

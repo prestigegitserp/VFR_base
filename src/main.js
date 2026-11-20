@@ -5,6 +5,7 @@ import { Vision } from './vision.js';
 import { contain, Temporal } from './tracking.js';
 import { projection as cameraProjection, solveHead } from './camera-fit.js';
 import { solveBody } from './body-volume.js';
+import { TurnSequence } from './body-heading.js';
 import { subjectMask } from './subject-mask.js';
 import { drawMedia, FrameCompositor } from './composite.js';
 import { checkSize, chooseSize, manualProfile, TwoViewScan } from './sizing.js';
@@ -23,11 +24,11 @@ const el=(tag,content,cls)=>{
 const stage=$('stage'), video=$('video'), img=$('photo'), canvas=$('render'), ctx=$('foreground').getContext('2d');
 const cameraFrame=$('camera-frame'), sampleFrame=document.createElement('canvas');
 const cameraPixels=cameraFrame.getContext('2d',{alpha:false}), samplePixels=sampleFrame.getContext('2d',{alpha:false});
-const storage='vfr-atelier:v6:';
+const storage='vfr-atelier:v7:';
 try{
   if(!localStorage.getItem(storage+'initialized')){
     for(const key of ['profile','preference','cart']){
-      const old=['v5','v4','v3','v2'].map(v=>localStorage.getItem('vfr-atelier:'+v+':'+key)).find(v=>v!=null);
+      const old=['v6','v5','v4','v3','v2'].map(v=>localStorage.getItem('vfr-atelier:'+v+':'+key)).find(v=>v!=null);
       if(old!=null&&localStorage.getItem(storage+key)==null)localStorage.setItem(storage+key,old);
     }
     localStorage.setItem(storage+'initialized','true');
@@ -47,7 +48,7 @@ const state={
   coverage:'balanced',response:'steady',camera:'user',alignment:{full:emptyAlignment(),upper:emptyAlignment(),face:emptyAlignment()},
   busy:false,ready:false,tracked:null,mask:null,headFrame:null,faceProbe:0,delegate:'',lastInfer:0,poseMs:0,maskMs:0,framePeriod:0,
   light:.50,scan:null,issue:'',lens:63,inspection:null,orbit:0,orbitMode:'fit',shapeHistory:{},
-  sync:'matched',capturedAt:0,paintedAt:0,
+  sync:'matched',capturedAt:0,paintedAt:0,turnGuide:null,turnPlay:null,recovery:false,
 };
 const vision=new Vision(), smoothPose=new Temporal(), smoothWorld=new Temporal(), smoothFace=new Temporal([33,263]);
 const compositor=new FrameCompositor();
@@ -59,6 +60,9 @@ let bounds={w:1,h:1}, renderKey=null, projection=null, headProjection=null, rigR
 const enqueue=(fn)=>{const p=commands.then(fn);commands=p.catch(()=>{});return p;};
 const gpu=()=>!!studio&&!studio.lost;
 const semantic=()=>state.occlusion||state.mode==='upper'||state.mode!=='face'&&state.coverage!=='off'||Boolean(state.scan);
+const directions={front:'روبه‌رو',side:'نیم‌رخ',back:'پشت'};
+const orbitVisible=()=>state.source==='studio'||Boolean(state.inspection);
+const angleNow=()=>state.source==='studio'?state.turn:state.orbit;
 const source=()=>state.source==='live'&&video.readyState>=2?video:state.source==='photo'&&img.complete&&img.naturalWidth?img:null;
 const mirrored=()=>state.source==='live'&&state.mirror;
 const mediaSize=(m)=>[m?.videoWidth??m?.naturalWidth??m?.width,m?.videoHeight??m?.naturalHeight??m?.height];
@@ -189,11 +193,19 @@ function controls(){
   $('view-volume').hidden=demo;
   $('view-volume').disabled=!supported||!state.ready||(!stable?.rig&&!state.inspection);
   press($('view-volume'),Boolean(state.inspection));
-  $('orbit-tools').hidden=!state.inspection;
+  $('orbit-tools').hidden=!orbitVisible();
+  $('orbit-angle').disabled=$('play-turn').disabled=!supported;
+  for(const b of $$('[data-angle]'))b.disabled=!supported;
+  refreshAngle();
+  press($('play-turn'),state.turnPlay!==null);
   $('body-views').hidden=!state.inspection||state.mode==='face';
-  $('orbit-mode').querySelector('[value=strain]').disabled=state.item.source==='scan';
+  for(const v of ['strain','contact'])$('orbit-mode').querySelector(`[value=${v}]`).disabled=state.item.source==='scan';
   $('orbit-mode').value=state.orbitMode;
   $('strain-key').hidden=!state.inspection||state.orbitMode!=='strain';
+  $('contact-key').hidden=!state.inspection||state.orbitMode!=='contact';
+  $('turn-person').hidden=state.source!=='live'||state.mode==='face'||Boolean(state.inspection);
+  $('turn-person').disabled=!supported||!state.ready||Boolean(state.scan);
+  press($('turn-person'),Boolean(state.turnGuide));
   stage.dataset.view=state.inspection?'model':'image';
   if(demo&&$('alignment-dialog').open)$('alignment-dialog').close();
   press($('inspect'),state.debug);
@@ -235,7 +247,7 @@ async function updateLook(updateForm) {
 function select(item,adjust=true){
   state.item=item;state.size=chooseSize(item,state.body,state.preference)?.size??startingSize(item);
   state.color=0;state.wind=false;
-  if(item.source==='scan'&&state.orbitMode==='strain')state.orbitMode='fit';
+  if(item.source==='scan'&&['strain','contact'].includes(state.orbitMode))state.orbitMode='fit';
   if(!state.formPinned){state.formId=item.form;$('form-select').value=item.form;}
   if(adjust&&!compatible(item,state.mode))changeFrame(item.frame,false);
   product();controls();
@@ -252,6 +264,8 @@ function resetVision() {
   state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.framePeriod=0;state.delegate='';state.issue='';
   projection=null;headProjection=null;stable=null;state.headFrame=null;state.faceProbe=0;
   state.inspection=null;state.orbit=0;state.orbitMode='fit';state.shapeHistory={};
+  state.turnGuide=null;stopTurn();state.recovery=false;$('direction-tag').hidden=true;
+  delete stage.dataset.direction;delete stage.dataset.angle;delete stage.dataset.turnProgress;delete stage.dataset.garmentMesh;
   state.capturedAt=state.paintedAt=0;
   stage.dataset.sync='direct';cameraFrame.hidden=true;
   ctx.save();ctx.resetTransform();ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.restore();
@@ -417,7 +431,7 @@ async function analyzePhoto(id){
 }
 
 function applyTracking(result,at,matched=false){
-  state.delegate=result.delegate;state.lastInfer=result.timeMs;
+  state.delegate=result.delegate;state.lastInfer=result.timeMs;state.recovery=Boolean(result.recovery);
   state.poseMs=result.poseMs;state.maskMs=result.maskMs || state.maskMs;
   state.issue=result.underlyingError?'mask-unavailable':'';
   stage.dataset.vision=vision.worker?'worker':'main';
@@ -541,7 +555,7 @@ function sense(now){
     if(sampleFrame.width!==width||sampleFrame.height!==height){sampleFrame.width=width;sampleFrame.height=height;}
     samplePixels.drawImage(video,0,0,width,height);
   }
-  enqueue(()=>vision.infer(matched?sampleFrame:video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode==='upper',headHint}))
+  enqueue(()=>vision.infer(matched?sampleFrame:video,{mode,method:'VIDEO',time:now,masks:!!masks,fallback:mode!=='face',headHint}))
     .then(result=>{
       if(id!==operation||syncId!==syncChange)return;
       const at=performance.now();
@@ -601,6 +615,23 @@ function scanPrompt(now){
   return true;
 }
 
+function turnPrompt(rig,result){
+  const sequence=state.turnGuide;
+  if(!sequence)return false;
+  if(result.status==='locked')sequence.ingest(rig,result.at);
+  if(stage.dataset.turnProgress!==String(sequence.index))stage.dataset.turnProgress=String(sequence.index);
+  const guideText=[
+    'روبه‌رو بمان تا نمای اول ثبت شود.',
+    'آرام به یک سمت بچرخ و در نیم‌رخ مکث کن.',
+    'همان جهت را ادامه بده تا پشتت به دوربین باشد.',
+    'روبه‌رو، نیم‌رخ و پشت ثبت شدند.',
+  ][sequence.index];
+  guide(guideText,()=>{
+    state.turnGuide=null;delete stage.dataset.turnProgress;guide(null);controls();
+  },sequence.index===3?'بستن':'لغو');
+  return true;
+}
+
 function resize(){
   bounds={w:stage.clientWidth,h:stage.clientHeight};
   renderKey=null;
@@ -614,9 +645,13 @@ let recentStats;
 function diagnostics(now,result){
   const rig=result.rig;
   const media=source(),[w,h]=mediaSize(media);
-  const fit=rig?.volume&&studio?studio.fitted.report():null;
-  recentStats={version:6,source:state.source,frame:state.mode,status:result.status,
+  const garment=state.source==='studio'?studio?.wear?.stats?.():null;
+  const fit=rig?.volume&&studio?studio.fitted.report():garment?{mode:'drape',...garment}:null;
+  recentStats={version:7,source:state.source,frame:state.mode,status:result.status,
     anchor:rig?.kind??null,trackingScore:rig?Math.round(rig.quality*100):null,
+    direction:rig?.view??null,headingSource:rig?.headingSource??null,headingConfidence:rig?.headingReliability??null,
+    shoulderErrorPx:rig?.shoulderError??null,shouldersObserved:rig?.anchors??null,roiRecovery:state.recovery,
+    measuredTurn:state.turnGuide?.samples??[],viewAngle:orbitVisible()?angleNow():null,
     yaw:rig?Math.round(rig.yaw*180/Math.PI):null,arms:rig?.armQuality?.map(x=>x>=.55?'tracked':'estimated')??null,
     mask:!!result.mask,maskAgeMs:result.mask&&state.source==='live'?ms(now-state.mask?.at):null,
     delegate:state.delegate||null,thread:stage.dataset.vision??null,
@@ -625,13 +660,20 @@ function diagnostics(now,result){
     horizontalFov:state.lens,headFitPx:ms(rig?.reprojection??rig?.head?.reprojection),
     shoulderContours:rig?.volume?.topCount??null,bodyShape:rig?.volume?.source??null,bodyTriangles:fit?.triangles??null,
     clothModel:fit?.mode??null,clothVertices:fit?.vertices??null,contactCorrections:fit?.contacts??null,
+    simulationTriangles:fit?.simulationTriangles??null,displayTriangles:fit?.renderTriangles??null,sweptContacts:fit?.swept??null,
+    testedVertices:fit?.testedVertices??null,residualVertices:fit?.insideVertices??null,
+    testedFaces:fit?.testedFaces??null,residualFaces:fit?.insideFaces??null,deepestVertexMm:fit?.deepestVertexMm??null,
     maxCorrectionMm:fit?.maxCorrection==null?null:ms(fit.maxCorrection*1000),meanEdgeStretch:fit?.stretch??null,
     preview:state.inspection?state.orbitMode:'image',cameraSync:stage.dataset.sync};
   if(!state.debug)return;
   $('fit-health').textContent=state.source==='studio'?'مانکن':statusLabels[result.status];
   $('fit-anchor').textContent=({face:'بینی و مش صورت',body:'مفصل، سیلوئت و مش بدن',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
   $('fit-score').textContent=rig?show(recentStats.trackingScore):'—';
-  $('fit-yaw').textContent=rig?`${show(recentStats.yaw)}°`:'—';
+  $('fit-yaw').textContent=rig?`${show(recentStats.yaw)}°`:orbitVisible()?`${show(angleNow())}°`:'—';
+  $('fit-facing').textContent=rig?.view?`${directions[rig.view]} · ${show(Math.round(rig.headingReliability*100))}٪`:'—';
+  $('fit-reprojection').textContent=rig?.anchors?.some(Boolean)?`${show(rig.shoulderError)} پیکسل`:'—';
+  $('fit-garment-mesh').textContent=fit?.renderTriangles?`${show(fit.renderTriangles)} رندر · ${show(fit.simulationTriangles)} حل`:'—';
+  $('fit-residual').textContent=fit?.testedFaces?`${show(fit.insideFaces)} از ${show(fit.testedFaces)} نمونهٔ سطح`:'—';
   $('fit-mask').textContent=result.mask?(state.source==='photo'?'آماده':`${show(recentStats.maskAgeMs)} ms`):'—';
   $('fit-arms').textContent=rig?.armQuality?rig.armQuality.map(x=>x>=.55?'ردیابی‌شده':'تخمینی').join(' / '):'—';
   $('fit-speed').textContent=state.delegate?`${state.delegate} / ${Math.round(state.poseMs)} ms`:'—';
@@ -654,6 +696,11 @@ function animate(now){
     return;
   }
   const inspection=Boolean(state.inspection);
+  if(state.turnPlay!==null&&orbitVisible()){
+    const value=Math.min(180,Math.round((now-state.turnPlay)*.040));
+    if(value!==angleNow())setOrbit(value,false);
+    if(value===180)stopTurn();
+  }
   const result=fittedFrame(now), {rig,mask,alpha,status}=result;
   const viewButton=$('view-volume');
   const disabled=!rig||demo;
@@ -664,12 +711,19 @@ function animate(now){
   const matte=mask?'active':'off';
   if(stage.dataset.matte!==matte)stage.dataset.matte=matte;
   if(inspection){signal('نمای سه‌بعدی تن‌خور','ready');}
+  const tag=$('direction-tag'),direction=rig?.view;
+  tag.hidden=!direction||inspection;
+  if(direction){
+    const label=`${directions[direction]} · ${show(Math.abs(Math.round(rig.yaw*180/Math.PI)))}°`;
+    if(tag.textContent!==label)tag.textContent=label;
+  }
+  if(stage.dataset.direction!==(direction??'none'))stage.dataset.direction=direction??'none';
   if(live&&state.ready&&!inspection){
     const label=status==='hold'?'بازیابی ردیابی':status==='estimate'?'برآورد بالاتنه':rig?state.mode==='face'?'ردیابی چهره':'ردیابی بدن':'در انتظار قاب مناسب';
     signal(label,status==='locked'?'ready':'pending');
-    if(!scanPrompt(now)){
+    if(!scanPrompt(now)&&!turnPrompt(rig,result)){
       if(!rig&&state.mode==='full'&&state.tracked?.pose)guide('برای نمای نزدیک، قاب بالاتنه را انتخاب کن.',()=>changeFrame('upper'),'قاب بالاتنه');
-      else guide(status==='hold'?'چند لحظه صورت و شانه‌ها را در قاب نگه دار.':!rig?fitModes[state.mode].title:
+      else guide(status==='hold'?'چند لحظه تنه و شانه‌ها را در قاب نگه دار.':!rig?fitModes[state.mode].title:
         state.mode==='full'&&!rig.full?'برای حرکت دامن، پاها هم در قاب باشند.':null);
     }
   }
@@ -695,9 +749,9 @@ function animate(now){
   const media=source(), rect=sourceRect(media);
   if(media&&(!live||frame%12===1))light(media,rig);
   const started=performance.now();
-  studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,
+  studio.update({dt,time:now,mode:state.mode,rig,move:state.move&&state.turnPlay===null,wind:state.wind,turn:state.turn*Math.PI/180,zoom:state.zoom,
     lightValue:state.light,reduce,adjustment,mirror:mirrored(),orbit:inspection?state.orbit:null,orbitMode:state.orbitMode,
-    quick:live&&!state.high});
+    quick:live&&!state.high,diagnose:state.debug});
   const fitted=rig?.volume?studio.fitted.report():null;
   if(fitted?.triangles){
     const triangles=String(fitted.triangles);
@@ -707,6 +761,9 @@ function animate(now){
   }else if(stage.dataset.bodyMesh){
     delete stage.dataset.bodyMesh;delete stage.dataset.bodyShape;delete stage.dataset.cloth;
   }
+  const garment=fitted?.renderTriangles??(demo?studio.wear?.stats?.()?.renderTriangles:null);
+  if(garment)stage.dataset.garmentMesh=String(garment);else delete stage.dataset.garmentMesh;
+  if(orbitVisible())stage.dataset.angle=String(angleNow());
   studio.draw(state.split&&!inspection?state.splitAt/100:0);
   if(!demo&&!inspection)compositor.draw(ctx,studio,{rect,mirror:mirrored(),mask,rig,alpha,debug:state.debug,cut:state.item.cut,
     tailored:state.item.cut==='coat'||state.item.cut==='jacket'&&state.item.id!=='orion',coverage:state.coverage,occlusion:state.occlusion});
@@ -753,7 +810,13 @@ $('freeze').addEventListener('click',()=>{
   still.toBlob(blob=>{if(blob)loadPhoto(blob,id);},'image/jpeg',.93);
 });
 
+$('turn-person').addEventListener('click',()=>{
+  if(state.turnGuide){state.turnGuide=null;delete stage.dataset.turnProgress;guide(null);}
+  else state.turnGuide=new TurnSequence();
+  controls();
+});
 $('view-volume').addEventListener('click',()=>{
+  stopTurn();
   if(state.inspection){
     state.inspection=null;
     signal(state.source==='photo'?'پرو روی عکس':'بازیابی ردیابی','ready');
@@ -765,26 +828,43 @@ $('view-volume').addEventListener('click',()=>{
   }
   renderKey=null;controls();
 });
-function setOrbit(angle){
-  state.orbit=angle;
+function refreshAngle(){
+  const angle=angleNow();
   $('orbit-angle').value=String(angle);$('orbit-value').textContent=show(angle)+'°';
+  const preset=Math.abs(angle)<2?0:Math.abs(angle)>177?180:Math.abs(Math.abs(angle)-90)<2?90:null;
+  for(const button of $$('[data-angle]'))press(button,Number(button.dataset.angle)===preset);
+}
+function stopTurn(){
+  state.turnPlay=null;
+  press($('play-turn'),false);$('play-turn').querySelector('span').textContent='پخش چرخش';
+}
+function setOrbit(angle,manual=true){
+  if(manual)stopTurn();
+  if(state.source==='studio')state.turn=angle;else state.orbit=angle;
+  refreshAngle();
 }
 $('orbit-angle').addEventListener('input',e=>setOrbit(Number(e.currentTarget.value)));
+for(const button of $$('[data-angle]'))button.addEventListener('click',()=>setOrbit(Number(button.dataset.angle)));
+$('play-turn').addEventListener('click',()=>{
+  if(state.turnPlay!==null){stopTurn();return;}
+  setOrbit(0,false);state.turnPlay=performance.now();
+  press($('play-turn'),true);$('play-turn').querySelector('span').textContent='مکث چرخش';
+});
 $('orbit-mode').addEventListener('change',e=>{state.orbitMode=e.currentTarget.value;controls();});
 $('export-body').addEventListener('click',()=>{
   const obj=state.inspection&&studio?.fitted.bodyObj();
-  if(obj)download(new Blob([obj],{type:'text/plain'}),'VFR-v6-body.obj');
+  if(obj)download(new Blob([obj],{type:'text/plain'}),'VFR-v7-body.obj');
 });
 let drag=null;
 stage.addEventListener('pointerdown',e=>{
-  if(!state.inspection||e.button!==0||e.target.closest('button'))return;
-  stage.setPointerCapture(e.pointerId);
-  drag={id:e.pointerId,x:e.clientX,angle:state.orbit};
+  if(!orbitVisible()||!gpu()||e.button!==0||e.target.closest('button,input'))return;
+  stage.setPointerCapture(e.pointerId);stopTurn();
+  drag={id:e.pointerId,x:e.clientX,angle:angleNow()};
 });
 stage.addEventListener('pointermove',e=>{
-  if(drag?.id!==e.pointerId||!state.inspection)return;
+  if(drag?.id!==e.pointerId||!orbitVisible())return;
   const next=drag.angle+(drag.x-e.clientX)*.52;
-  setOrbit(Math.round((((next+180)%360)+360)%360-180));
+  setOrbit(Math.round((((next+180)%360)+360)%360-180),false);
 });
 stage.addEventListener('lostpointercapture',()=>{drag=null;});
 
@@ -799,7 +879,7 @@ $('fullscreen').addEventListener('click',async()=>{
   try{if(document.fullscreenElement)await document.exitFullscreen();else if(stage.requestFullscreen)await stage.requestFullscreen();else toast('این مرورگر تمام‌صفحهٔ آینه را پشتیبانی نمی‌کند.');}
   catch{toast('تمام‌صفحه باز نشد.');}
 });
-$('turn').addEventListener('click',()=>{state.turn=state.turn>=.78?0:state.turn+.39;});
+$('turn').addEventListener('click',()=>setOrbit(Math.abs(state.turn)>=170?0:Math.abs(state.turn)>=70?180:90));
 $('motion').addEventListener('click',()=>{state.move=!state.move;controls();});
 $('wind').addEventListener('click',()=>{state.wind=!state.wind;controls();});
 $('compare').addEventListener('click',()=>{state.split=state.split?0:1;controls();});
@@ -839,8 +919,10 @@ function setDebug(enabled){
 $('debug').addEventListener('change',e=>setDebug(e.currentTarget.checked));
 $('inspect').addEventListener('click',()=>setDebug(!state.debug));
 $('export-diagnostics').addEventListener('click',()=>{
-  const now=performance.now();diagnostics(now,gpu()?fittedFrame(now):{status:'none'});
-  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v6-diagnostics.json');
+  const now=performance.now();
+  if(gpu())(state.source==='studio'?studio.wear:studio.fitted.product)?.inspect?.();
+  diagnostics(now,gpu()?fittedFrame(now):{status:'none'});
+  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v7-diagnostics.json');
 });
 const alignmentInputs=$$('[data-align]');
 function syncAlignment(){
@@ -913,7 +995,7 @@ $('scan-start').addEventListener('click',()=>{
   $('fit-dialog').close();changeFrame('full');
   if(state.source!=='live'||!stream&&!state.busy)changeSource('live');
   state.inspection=null;state.orbitMode='fit';state.split=0;renderKey=null;controls();
-  state.scan={sensor:new TwoViewScan(heightMm),deadline:null};
+  state.turnGuide=null;state.scan={sensor:new TwoViewScan(heightMm),deadline:null};controls();
   guide('برای نمای اول، تمام‌قد روبه‌رو بایست.');
 });
 

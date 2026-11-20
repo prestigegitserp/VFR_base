@@ -166,14 +166,14 @@ export class FittedStage {
 
   bodyObj() { return this.activeBody?.obj() ?? null; }
 
-  update({ rig, mirror, adjustment, orbit, orbitMode = 'fit', width, height, time, dt, breeze, scanned, quick = false }) {
+  update({ rig, mirror, adjustment, orbit, orbitMode='fit',width,height,time,dt,breeze,scanned,quick=false,diagnose=false }) {
     this.group.visible = Boolean(rig);
     const cam = this.camera;
     if (!rig) return cam;
     const mode = rig.kind === 'face' ? 'face' : 'body';
     const inspection = orbit !== null;
     const bodyOnly = inspection && orbitMode === 'body' && mode === 'body';
-    const strain = inspection && orbitMode === 'strain' && mode === 'body';
+    const clothView=inspection&&mode==='body'&&['strain','contact'].includes(orbitMode)?orbitMode:'fit';
     const adjustId = [adjustment.x, adjustment.y, adjustment.width, adjustment.length, adjustment.depth].join('/');
     const poseChanged = rig !== this.changed;
     const viewChanged = this.inspecting !== inspection;
@@ -228,7 +228,7 @@ export class FittedStage {
       }
       this.overlay.position.copy(rig.origin);
       this.overlay.quaternion.copy(rig.q);
-      this.product?.view?.(strain ? 'strain' : 'fit');
+      this.product?.view?.(clothView);
       this.scannedMode = !this.product && scanned ? scanned.fitSurface ? 'scan-contact' : 'scanned' : null;
       this.scannedStats = null;
       if (this.product && (poseChanged || adjustmentChanged || breeze || !this.product.stats?.())) {
@@ -236,7 +236,7 @@ export class FittedStage {
         const elapsed = this.fitAt ? clamp((time - this.fitAt) * .001, dt, .047) : dt;
         this.fitAt = time;
         this.product.update(volume, this.localArms, time, elapsed, breeze, rig.origin,
-          { collider: mesh.collider, skin:mesh, adjustment, gravity, quick, settle: adjustmentChanged });
+          { collider:mesh.collider,skin:mesh,adjustment,gravity,quick,settle:adjustmentChanged,diagnose });
       } else if (scanned?.fitSurface) {
         if (poseChanged || adjustmentChanged || !scanned.surfaceStats) scanned.fitSurface(volume, this.localArms, mesh.collider, adjustment);
         this.scannedStats = scanned.surfaceStats;
@@ -256,7 +256,9 @@ export class FittedStage {
       const bottom = mode === 'face' ? rig.surface[152].y - .042 : center.y + lower - .055;
       center.y = (top + bottom) / 2;
       const distance = Math.max(mode === 'face' ? .49 : 1.05, (top - bottom) / .67);
-      const angle = orbit * Math.PI / 180;
+      const forward=mode==='face'?rig.forward:V(0,0,1).applyQuaternion(rig.q);
+      const heading=Math.atan2(forward.x,forward.z)*(mirror?-1:1);
+      const angle=heading+orbit*Math.PI/180;
       cam.fov = 41;
       cam.position.copy(center).add(V(Math.sin(angle) * distance, mode === 'face' ? .014 : .053, Math.cos(angle) * distance));
       cam.lookAt(center);
