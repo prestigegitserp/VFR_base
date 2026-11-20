@@ -225,7 +225,17 @@ test('body contact resolves penetration of a fitted garment and size changes ret
     const inside = [...index].map(i=>body.collider.distance(vertices.getX(i),vertices.getY(i),vertices.getZ(i)))
       .filter(d=>d<-.009);
     const report = cloth.stats();
-    assert.ok(inside.length/index.size<.023, `${cloth===sizes[0]?'small':'large'}: ${inside.length}/${index.size}; min ${Math.min(...inside)}`);
+    assert.equal(inside.length,0,`${cloth===sizes[0]?'small':'large'}: ${inside.length}/${index.size}; min ${Math.min(...inside)}`);
+    const faces=cloth.shell.geometry.index.array;
+    const midpoint=V(), vertex=V();
+    let intersections=0;
+    for(let i=0;i<faces.length;i+=3){
+      midpoint.fromBufferAttribute(vertices,faces[i])
+        .add(vertex.fromBufferAttribute(vertices,faces[i+1]))
+        .add(vertex.fromBufferAttribute(vertices,faces[i+2])).multiplyScalar(1/3);
+      if(body.collider.distance(midpoint.x,midpoint.y,midpoint.z)<-.005)intersections++;
+    }
+    assert.ok(intersections/(faces.length/3)<.014,String(intersections));
     assert.ok(report.contacts>0);
     const row = 48*11;
     let ring = 0;

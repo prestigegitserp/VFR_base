@@ -40,7 +40,7 @@ function meshGraph(indices, rest, uv, fabric, pins) {
 }
 
 export class DrapeSolver {
-  constructor(indices, rest, uv, fabric, pins, bands = []) {
+  constructor(indices, rest, uv, fabric, pins, bands = [], limits) {
     this.graph = meshGraph(indices, rest, uv, fabric, pins);
     this.pos = new Float32Array(rest.length);
     this.previous = new Float32Array(rest.length);
@@ -50,6 +50,11 @@ export class DrapeSolver {
     this.material = fabric;
     this.pins = pins;
     this.bands = bands;
+    this.indices = indices;
+    this.limits = limits;
+    this.shift = new Float32Array(rest.length);
+    this.uses = new Float32Array(rest.length / 3);
+    this.probe = new Float32Array(3);
     this.padding = .004 + fabric.thickness * .70;
     this.clock = 0;
     this.vertices = this.graph.mass.reduce((sum, x) => sum + (x > 0), 0);
@@ -109,11 +114,19 @@ export class DrapeSolver {
       for (let pass = 0; pass < sweeps; pass++) {
         this.constrain(pass % 2 === 1);
         this.attachBands(target);
-        if (pass === 2) resolve(false, false);
+        if (pass === 2) {
+          this.limitOffset(target);
+          resolve(false, false);
+        }
       }
       resolve(true, first && step === 0);
     }
-    if (!steps) resolve(true, false);
+    this.limitOffset(target);
+    if (collider) {
+      const surface = this.contactFaces(collider, quick ? 1 : 2);
+      contacts += surface;
+      resolve(true, false);
+    }
     this.stats = { contacts, maxCorrection: correction, vertices: this.vertices };
     return pos;
   }
@@ -134,6 +147,54 @@ export class DrapeSolver {
         previous[at] = point;
       }
     }
+  }
+
+  limitOffset(target) {
+    if (!this.limits) return;
+    const { pos, previous, limits } = this;
+    for (let n = 0; n < limits.length; n++) {
+      const i = n * 3;
+      const x = pos[i] - target[i], y = pos[i + 1] - target[i + 1], z = pos[i + 2] - target[i + 2];
+      const d = Math.hypot(x, y, z);
+      if (d <= limits[n]) continue;
+      const step = limits[n] / d - 1;
+      pos[i] += x * step; pos[i + 1] += y * step; pos[i + 2] += z * step;
+      previous[i] += x * step; previous[i + 1] += y * step; previous[i + 2] += z * step;
+    }
+  }
+
+  contactFaces(collider, passes) {
+    const { indices, pos, shift, uses, probe } = this;
+    const padding = this.padding * .73;
+    let total = 0;
+    for (let k = 0; k < passes; k++) {
+      shift.fill(0); uses.fill(0);
+      for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i]*3, b = indices[i+1]*3, c = indices[i+2]*3;
+        const x = (pos[a]+pos[b]+pos[c]) / 3, y = (pos[a+1]+pos[b+1]+pos[c+1]) / 3;
+        const z = (pos[a+2]+pos[b+2]+pos[c+2]) / 3;
+        probe[0]=x; probe[1]=y; probe[2]=z;
+        const correction = collider.project(probe,0,padding,.057);
+        if (correction < .0025) continue;
+        const strength = Math.min(1, .024 / correction);
+        const dx = (probe[0]-x)*strength, dy = (probe[1]-y)*strength, dz = (probe[2]-z)*strength;
+        shift[a]+=dx; shift[b]+=dx; shift[c]+=dx;
+        shift[a+1]+=dy; shift[b+1]+=dy; shift[c+1]+=dy;
+        shift[a+2]+=dz; shift[b+2]+=dz; shift[c+2]+=dz;
+        uses[a/3]++; uses[b/3]++; uses[c/3]++;
+        total++;
+      }
+      for (let i = 0; i < uses.length; i++) {
+        if (!uses[i]) continue;
+        const base = i*3, blend = .83/uses[i];
+        for(let j=base;j<base+3;j++){
+          const delta = shift[j]*blend;
+          pos[j]+=delta;
+          this.previous[j]+=delta;
+        }
+      }
+    }
+    return total;
   }
 
   attachBands(target) {

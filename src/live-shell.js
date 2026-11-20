@@ -318,26 +318,25 @@ export function makeLiveShell(item, size, color) {
       let normal = V(0, 0, 1);
       for (let r = 1; r <= cuffRows; r++) {
         const t = r / cuffRows;
-        const frame = skin?.armFrame(j, t * (1 + trim / Math.max(.05,observed)));
-        const plane = frame ? { front:frame.front, cross:frame.side.clone().negate() } :
-          circleFrame(curve.getTangent(t), normal);
-        const { front, cross } = plane;
-        const middle = frame ? frame.center.clone().add(bias).lerp(socket,1-ease(t/.145)) : curve.getPoint(t);
+        const middle = curve.getPoint(t), { front, cross } = circleFrame(curve.getTangent(t), normal);
         normal = front;
         const armRad = width * (coat ? .159 : knit ? .138 : .151) * circumferenceScale;
         const wristRad = width * .084 * circumferenceScale ** .56;
-        const current = mix(armRad, wristRad, t ** 1.08);
-        const radius = frame ? Math.max(current, frame.radius + .010 + .004*Math.max(0,circumferenceScale-1)) : current;
-        const seamWeight = ease(t / (frame ? .171 : .243));
+        const radius = mix(armRad, wristRad, t ** 1.08);
+        const seamWeight = ease(t / .209);
         for (let i = 0; i < n; i++) {
           const a = hole.vertices[i].angle;
           const bend = Math.exp(-(((t - .62) * 7) ** 2));
-          const fold = Math.cos(6 * a + 25 * t) * bend * (.0028 + .0048 * flex) +
+          const fold = Math.cos(6 * a + 25 * t) * bend * (.0018 + .0025 * flex) +
             .0013 * Math.sin(a * 13 - t * 31) * Math.sin(t * Math.PI);
           const radial = front.clone().multiplyScalar(Math.cos(a) * (radius * .91 + fold))
             .addScaledVector(cross, Math.sin(a) * (radius + fold) * hole.side);
-          const offset = seam[i].clone().sub(socket).lerp(radial, seamWeight);
-          middle.clone().add(offset).toArray(output, (hole.offset + (r - 1) * n + i) * 3);
+          const anchored = middle.clone().add(seam[i].clone().sub(socket));
+          const fitted = skin ? skin.sampleArm(j, t * (1 + trim / Math.max(.05,observed)),
+            Math.atan2(-Math.sin(a)*hole.side,Math.cos(a)),
+            .012 + (coat ? .006 : knit ? 0 : .004) + (circumferenceScale - .86) * .026 + fold).add(bias)
+            : middle.clone().add(radial);
+          anchored.lerp(fitted, seamWeight).toArray(output, (hole.offset + (r - 1) * n + i) * 3);
         }
       }
     }
@@ -351,7 +350,8 @@ export function makeLiveShell(item, size, color) {
     return [{ start: h.offset + (cuffRows - 2) * size, size, weight: .44 },
       { start: h.offset + (cuffRows - 1) * size, size, weight: .83 }];
   });
-  const solver = new DrapeSolver(geometry.index.array, rest, geometry.attributes.uv.array, fabric, pins, bands);
+  const limits = Float32Array.from(pins, (_,i) => i >= offset ? .026 : long ? .064 : .039);
+  const solver = new DrapeSolver(geometry.index.array, rest, geometry.attributes.uv.array, fabric, pins, bands, limits);
   const neutralColors = new Float32Array(shade);
   const low = new T.Color('#2a8e88'), mid = new T.Color('#e6ad62'), high = new T.Color('#bc4153');
   let view = 'fit';

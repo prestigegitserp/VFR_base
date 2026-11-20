@@ -23,7 +23,8 @@ function socket(column, sign) {
   for (let c = right; c > left; c--) edges.push([bottom, c]);
   for (let r = bottom; r > top; r--) edges.push([r, left]);
   const angles = edges.map(([r, c]) => Math.atan2(-(r - (top + bottom) / 2) * sign / 2.5, -(c - column) * sign / 4));
-  return { top, bottom, left, right, rim: edges.map(([r,c]) => at(r, c)), angles };
+  const around = angles.map((a, i) => ({ a, i })).sort((a,b)=>a.a-b.a);
+  return { top, bottom, left, right, rim: edges.map(([r,c]) => at(r, c)), angles, around };
 }
 
 function close(out, rim, end, top = false) {
@@ -228,7 +229,7 @@ export class BodyMesh {
         centers[Math.min(r + 1, centers.length - 1)].clone().sub(centers[r - 1]).normalize();
       const basis = tubeAxes(direction, front);
       front = basis[0];
-      frames.push({ center, front, side:basis[1], direction, radius:radii[r] });
+      frames.push({ center, direction });
       const weight = r === 0 ? .35 : r === 1 ? .71 : 1;
       angles.forEach((a, i) => {
         const p = center.clone().addScaledVector(front, Math.cos(a) * radii[r] * oval)
@@ -241,29 +242,48 @@ export class BodyMesh {
     return frames;
   }
 
-  armFrame(side, t) {
+  sampleArm(side, t, angle, clearance) {
     const { frames, knots, shoulder, length } = this.armFrames[side];
-    const end = frames[wristAt];
-    if (t >= 1) return { ...end, center:end.center.clone().addScaledVector(end.direction,(t-1)*length) };
-    if (t <= knots[0]) return { ...frames[0], center:shoulder.clone().lerp(frames[0].center,t/knots[0]) };
-    let i = 1;
-    while (knots[i] < t) i++;
-    const a=frames[i-1], b=frames[i], u=(t-knots[i-1])/(knots[i]-knots[i-1]);
-    return { center:a.center.clone().lerp(b.center,u), front:a.front.clone().lerp(b.front,u).normalize(),
-      side:a.side.clone().lerp(b.side,u).normalize(), radius:blend(a.radius,b.radius,u) };
+    const { rim, around, start } = this.topology.arms[side];
+    const turn = angle < around[0].a ? angle + tau : angle;
+    let col = 0;
+    while (col < around.length - 1 && around[col + 1].a <= turn) col++;
+    const a = around[col], b = around[(col + 1) % around.length];
+    const u = (turn - a.a) / ((col === around.length - 1 ? b.a + tau : b.a) - a.a);
+    const q = V();
+    const sample = row => V().fromArray(this.points, (start + row * rim.length + a.i) * 3)
+      .lerp(q.fromArray(this.points, (start + row * rim.length + b.i) * 3), u);
+    let center, point;
+    if (t >= 1) {
+      const frame = frames[wristAt], displacement = frame.direction.clone().multiplyScalar((t - 1) * length);
+      center = frame.center.clone().add(displacement);
+      point = sample(wristAt).add(displacement);
+    } else if (t <= knots[0]) {
+      center = shoulder.clone().lerp(frames[0].center,t/knots[0]);
+      point = sample(0).add(center).sub(frames[0].center);
+    } else {
+      let i = 1;
+      while (knots[i] < t) i++;
+      const v = (t - knots[i - 1]) / (knots[i] - knots[i - 1]);
+      center = frames[i-1].center.clone().lerp(frames[i].center,v);
+      point = sample(i-1).lerp(sample(i),v);
+    }
+    return point.addScaledVector(point.clone().sub(center).normalize(), clearance);
   }
 
-  depthSurface(bareArms, leftHand, rightHand) {
-    const key = [bareArms,leftHand,rightHand].join('/');
+  depthSurface(bareArms, leftHand, rightHand, showLegs = false) {
+    const key = [bareArms,leftHand,rightHand,showLegs].join('/');
     if (!this.depthSurfaces.has(key)) {
-      const { indices, neckFaces, arms } = this.topology;
+      const { indices, neckFaces, arms, legs } = this.topology;
       const visible = [leftHand, rightHand];
       const used = neckFaces.slice();
       arms.forEach((arm, i) => {
         if (bareArms || visible[i]) used.push(...indices.slice(arm.faces[bareArms ? 0 : wristAt + 1], arm.faces.at(-1)));
       });
+      if(showLegs)legs.forEach(leg=>used.push(...indices.slice(leg.faces[0],leg.faces.at(-1))));
       const geometry = new BufferGeometry();
       geometry.setAttribute('position',this.geometry.attributes.position);
+      geometry.setAttribute('normal',this.geometry.attributes.normal);
       geometry.setIndex(used);
       this.depthSurfaces.set(key,geometry);
     }

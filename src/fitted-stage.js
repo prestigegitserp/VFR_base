@@ -198,8 +198,9 @@ export class FittedStage {
       if (poseChanged || adjustmentChanged) this.product?.fit(rig, adjustment);
     } else {
       const { volume } = rig;
-      this.skin.visible = inspection;
-      this.exposed.visible = !inspection;
+      this.skin.visible = bodyOnly;
+      this.exposed.visible = !bodyOnly;
+      this.exposed.material = inspection ? this.proxy : this.depth;
       const mesh = this.bodyMeshes[volume.mode === 'full' ? 1 : 0];
       const inv = rig.q.clone().invert();
       if (poseChanged || mesh !== this.activeBody) {
@@ -211,11 +212,9 @@ export class FittedStage {
         if (mesh !== this.activeBody) this.product?.reset?.();
         this.activeBody = mesh;
       }
-      if (!inspection) {
-        const bareArms = this.item.cut === 'dress' || this.item.cut === 'skirt';
-        const visible = i => rig.hands.some(hand=>hand.side===i && hand.front > .09);
-        this.exposed.geometry = mesh.depthSurface(bareArms,visible(0),visible(1));
-      }
+      const bareArms = this.item.cut === 'dress' || this.item.cut === 'skirt';
+      const visible = i => inspection || rig.hands.some(hand=>hand.side===i && hand.front > .09);
+      this.exposed.geometry = mesh.depthSurface(bareArms,visible(0),visible(1),inspection && mesh.full);
       if (poseChanged || viewChanged) {
         this.maskHead(rig.head);
         if (!rig.head && inspection) {
