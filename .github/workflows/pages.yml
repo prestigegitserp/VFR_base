@@ -6,8 +6,8 @@ on:
     paths: ['.github/workflows/pages.yml', '.github/workflows/validate-v2.yml']
   workflow_dispatch:
   workflow_run:
-    workflows: [Validate VFR Studio, Validate VFR Atelier, Validate VFR Atelier v3, Validate VFR Atelier v4]
-    branches: [v1, v2, v3, v4]
+    workflows: [Validate VFR Studio, Validate VFR Atelier, Validate VFR Atelier v3, Validate VFR Atelier v4, Validate VFR Atelier v6]
+    branches: [v1, v2, v3, v4, v6]
     types: [completed]
 
 permissions:
@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [v1, v2, v3, v4]
+        version: [v1, v2, v3, v4, v6]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,17 +60,19 @@ jobs:
       - name: Retain the root and version routes
         shell: bash
         run: |
-          mkdir -p pages/v1 pages/v2 pages/v3 pages/v4
+          mkdir -p pages/v1 pages/v2 pages/v3 pages/v4 pages/v6
           cp -a releases/vfr-pages-v1/. pages/
           cp -a releases/vfr-pages-v1/. pages/v1/
           cp -a releases/vfr-pages-v2/. pages/v2/
           cp -a releases/vfr-pages-v3/. pages/v3/
           cp -a releases/vfr-pages-v4/. pages/v4/
+          cp -a releases/vfr-pages-v6/. pages/v6/
           touch pages/.nojekyll
           test -s pages/v1/index.html
           test -s pages/v2/index.html
           test -s pages/v3/index.html
           test -s pages/v4/index.html
+          test -s pages/v6/index.html
           cmp pages/source-commit.txt pages/v1/source-commit.txt
           test -s pages/v2/runtime/face.task
           test -s pages/v2/runtime/mask.tflite
@@ -83,6 +85,11 @@ jobs:
           test -s pages/v4/runtime/face.task
           test -s pages/v4/runtime/mask.tflite
           test -s pages/v4/protocol/atelier-scanned.zip
+          test -s pages/v6/runtime/pose.task
+          test -s pages/v6/runtime/face.task
+          test -s pages/v6/runtime/mask.tflite
+          test -s pages/v6/protocol/atelier-scanned.zip
+          test -s pages/v6/source-commit.txt
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
