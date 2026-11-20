@@ -5,6 +5,7 @@ import { bodyModel, makeAvatar } from './avatar.js';
 import { clamp } from './catalog.js';
 import { dispose, makeWear } from './wear.js';
 import { FittedStage } from './fitted-stage.js';
+import { prepareImportedFit } from './imported-fit.js';
 
 const V=(x=0,y=0,z=0)=>new T.Vector3(x,y,z);
 function light(scene,color,intensity,position,shadow=false){
@@ -46,8 +47,12 @@ async function importWear(item,size,bytes) {
     box.max.y>.28 || box.min.y>-.15) {
     dispose(container);throw new Error('ابعاد مدل نسبت به نقاط مرجع در مقیاس متر سازگار نیست.');
   }
-  return {group:container,anchors:{span,torso:torso.dot(vertical)},update(){},reset(){},
+  const anchors={span,torso:torso.dot(vertical)};
+  const fitted=prepareImportedFit(container,studioParts,anchors);
+  return {group:container,anchors,fittedGroup:fitted?.group,update(){},reset(){this.surfaceStats=null;},
+    fitSurface:fitted&&function (...args){this.surfaceStats=fitted.fit(...args);},
     setPresentation(studio){for(const piece of studioParts)piece.visible=studio;},dispose(){
+    fitted?.dispose();
     const textures=new Set();
     container.traverse((o)=>{for(const m of (Array.isArray(o.material)?o.material:[o.material]).filter(Boolean))for(const value of Object.values(m))if(value?.isTexture)textures.add(value);});
     dispose(container);textures.forEach((t)=>t.dispose());
@@ -123,6 +128,7 @@ export class Atelier {
     this.fitted.clear();
     if(!this.wear)return;
     this.wear.group.parent?.remove(this.wear.group);
+    this.wear.fittedGroup?.removeFromParent();
     this.wear.dispose();
     this.wear=null;
   }
@@ -145,8 +151,9 @@ export class Atelier {
     this.source=source;
     this.fresh=true;
     this.wear?.reset();
+    this.fitted.reset();
   }
-  update({dt,time,mode,rig,move,wind,turn,zoom,lightValue,reduce,adjustment,mirror=false,orbit=null}){
+  update({dt,time,mode,rig,move,wind,turn,zoom,lightValue,reduce,adjustment,mirror=false,orbit=null,orbitMode='fit',quick=false}){
     if(this.lost)return;
     const demo=this.source==='studio';
     this.plinth.visible=this.floor.visible=demo&&mode==='full';
@@ -162,9 +169,9 @@ export class Atelier {
     if(!demo){
       const compatible=wear&&(mode==='face')===(this.attachment==='face');
       if(wear)wear.setPresentation?.(false);
-      this.activeGarment=compatible?(this.fitted.product??wear).group:null;
+      this.activeGarment=compatible?(this.fitted.product?.group??wear.fittedGroup??wear.group):null;
       this.camera=this.fitted.update({rig:compatible?rig:null,mirror,adjustment,orbit,width:this.width,
-        height:this.height,time,dt,breeze:wind,scanned:wear});
+        height:this.height,time,dt,breeze:wind,scanned:wear,orbitMode,quick});
       return;
     }
     this.fitted.group.visible=false;

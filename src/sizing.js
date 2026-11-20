@@ -1,4 +1,5 @@
 import { clamp, metrics } from './catalog.js';
+import { levels, perimeter } from './body-shape.js';
 
 const profileStyle = {
   close: { label: 'نزدیک به بدن', place: .24 },
@@ -71,6 +72,20 @@ function sliceBand(mask, landmarkX, atY) {
   return measurements.length ? median(measurements) : 0;
 }
 
+function foregroundEnd(mask, start, limit, sign) {
+  const { data, w, h } = mask;
+  let best = limit;
+  for (let y = start; sign * (limit - y) > 0; y += sign) {
+    const row = clamp(Math.round(y * h), 1, h - 2) * w;
+    let run = 0;
+    for (let x = 2; x < w - 2; x++) {
+      run = data[row + x] ? run + 1 : 0;
+      if (run >= 3) { best = y; break; }
+    }
+  }
+  return best;
+}
+
 export function scanSample(points, mask, aspect, heightMm, side) {
   if (!mask || !points || !Number.isFinite(aspect)) return null;
   const [nose, left, right, leftHip, rightHip, leftFoot, rightFoot] = [0, 11, 12, 23, 24, 29, 30].map((i) => points[i]);
@@ -79,19 +94,20 @@ export function scanSample(points, mask, aspect, heightMm, side) {
   const shoulderY = (left.y + right.y) / 2;
   const hipX = (leftHip.x + rightHip.x) / 2;
   const hipY = (leftHip.y + rightHip.y) / 2;
-  const crown = nose.y - clamp((shoulderY - nose.y) * .59, .035, .095);
-  const bottom = Math.max(leftFoot.y, rightFoot.y) + .009;
+  const headGuess = nose.y - clamp((shoulderY - nose.y) * .59, .032, .093);
+  const heel = Math.max(leftFoot.y, rightFoot.y);
+  const crown = foregroundEnd(mask, Math.max(.004, headGuess - .044), nose.y - .014, 1 / mask.h);
+  const bottom = foregroundEnd(mask, Math.min(.996, heel + .057), heel, -1 / mask.h);
   const span = bottom - crown;
   const visibleShoulders = Math.abs(right.x - left.x) * aspect / span * heightMm;
   const turn = Math.abs(left.z - right.z) / Math.max(.015, Math.abs(left.x - right.x));
   if (crown < .01 || bottom > .99 || span < .49 || hipY - shoulderY < .13 || Math.abs(left.y - right.y) > .047) return null;
   if (side ? visibleShoulders > 275 || turn < .61 : visibleShoulders < 267 || visibleShoulders > 635 || turn > .52) return null;
-  const sample = { stature: span, shoulder: visibleShoulders };
-  for (const [key, position] of [['chest', .23], ['waist', .69], ['hip', 1.01]]) {
-    const w = sliceBand(mask, shoulderX + (hipX - shoulderX) * position, shoulderY + (hipY - shoulderY) * position);
-    sample[key] = w * aspect / span * heightMm;
-    if (sample[key] < (side ? 95 : 205) || sample[key] > (side ? 440 : 600)) return null;
-  }
+  const ratio = aspect / span * heightMm;
+  const torso = (hipY - shoulderY) / span * heightMm;
+  const profile = levels.map(t => sliceBand(mask, shoulderX + (hipX - shoulderX) * t, shoulderY + (hipY - shoulderY) * t) * ratio);
+  if (profile.some(w => w < (side ? 83 : 156) || w > (side ? 470 : 662))) return null;
+  const sample = { stature: span, shoulder: visibleShoulders, torso, profile, chest: profile[3], waist: profile[6], hip: profile.at(-1) };
   return sample;
 }
 
@@ -119,11 +135,25 @@ export class TwoViewScan {
       const f = this.front.map((p) => p[key]);
       const s = this.side.map((p) => p[key]);
       const a = median(f) / 2, b = median(s) / 2;
-      const value = Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+      const value = perimeter(a, b);
       const spread = median(f.map((x) => Math.abs(x - a * 2))) + median(s.map((x) => Math.abs(x - b * 2)));
       measures[key] = { value: Math.round(value), uncertainty: Math.round(clamp(52 + spread * 2.6, 52, 125)) };
     }
     measures.shoulder = { value: Math.round(median(this.front.map((p) => p.shoulder))), uncertainty: 28 };
-    return { method: 'camera', measures };
+    const scan = { method: 'camera', measures };
+    const all = this.front.concat(this.side);
+    if (all.every(p => Number.isFinite(p.torso) && p.profile?.length === levels.length)) {
+      const sections = levels.map((_, i) => {
+        const observation = view => median(view.map(sample => {
+          const a = sample.profile[Math.max(0, i - 1)];
+          const b = sample.profile[i];
+          const c = sample.profile[Math.min(levels.length - 1, i + 1)];
+          return (a + 4 * b + c) / 6;
+        })) * .0005;
+        return { rx: observation(this.front), rz: observation(this.side) };
+      });
+      scan.shape = { version: 1, length: median(all.map(p => p.torso)) * .001, sections };
+    }
+    return scan;
   }
 }

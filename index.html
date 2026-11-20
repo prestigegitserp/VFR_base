@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f0e9">
-  <meta name="description" content="آتلیهٔ پرو مجازی VFR با حجم سه‌بعدی بدن، پرو عینک روی پل بینی و نمای چرخان تن‌خور.">
-  <title>VFR Atelier v4 · پرو بدن و عینک</title>
+  <meta name="description" content="پرو سه‌بعدی VFR Atelier با بازسازی مش بدن، شبیه‌سازی تماس پارچه و فیت عینک.">
+  <title>VFR Atelier v6 · مش بدن و پرو سه‌بعدی</title>
   <link rel="icon" href="./mark.svg" type="image/svg+xml">
   <script type="module" src="/src/main.js"></script>
 </head>
@@ -17,15 +17,15 @@
         <a href="#wardrobe">کمد لباس</a>
         <button class="nav-button" type="button" data-open="import-dialog"><i data-icon="upload"></i> ورود اسکن</button>
         <button class="nav-button" type="button" data-open="cart-dialog"><i data-icon="bag"></i> <span>سفارش</span> <b id="cart-count" hidden>۰</b></button>
-        <a class="old-version" href="../v3/" aria-label="مشاهده نسخه ۳" dir="ltr">v3</a>
+        <a class="old-version" href="../v4/" aria-label="مشاهده نسخه ۴" dir="ltr">v4</a>
       </nav>
     </div>
   </header>
 
   <main class="page">
     <div class="intro">
-      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>پرو با دوربین و عکس، تنظیم فریم عینک و بررسی فرم لباس از کنار.</p></div>
-      <button type="button" class="outline intro-fit" data-open="fit-dialog"><i data-icon="ruler"></i> پروفایل اندازه</button>
+      <div><h1>اتاق پرو <em>آتلیه</em></h1><p>مش بدنت را از دوربین یا عکس بساز و تن‌خور لباس را از همه طرف بررسی کن.</p></div>
+      <button type="button" class="outline intro-fit" data-open="fit-dialog"><i data-icon="ruler"></i> ساخت مش و اندازه</button>
     </div>
     <div class="workspace">
       <section class="mirror" aria-label="آینهٔ پرو">
@@ -76,8 +76,21 @@
           </div>
         </div>
         <div class="orbit-tools" id="orbit-tools" hidden>
-          <label for="orbit-angle">چرخش نمای تن‌خور</label>
-          <input type="range" id="orbit-angle" min="-72" max="72" value="0" dir="ltr">
+          <div class="orbit-angle">
+            <label for="orbit-angle">زاویهٔ دید</label>
+            <input type="range" id="orbit-angle" min="-180" max="180" value="0" dir="ltr">
+            <output id="orbit-value" for="orbit-angle" dir="ltr">۰°</output>
+          </div>
+          <div id="body-views" class="body-views">
+            <label for="orbit-mode" class="visually-hidden">محتوای نمای سه‌بعدی</label>
+            <select id="orbit-mode">
+              <option value="fit">تن‌خور</option>
+              <option value="body">مش بدن</option>
+              <option value="strain">کشش پارچه</option>
+            </select>
+            <button type="button" id="export-body" class="text-tool"><i data-icon="cube"></i> دریافت مش OBJ</button>
+          </div>
+          <p id="strain-key" class="strain-key" hidden>فیروزه‌ای کشش کم · کهربایی متوسط · سرخ زیاد</p>
         </div>
         <section class="inspector" id="inspector" aria-labelledby="inspector-title" hidden>
           <div class="inspector-head"><h2 id="inspector-title">عیب‌یابی آینه</h2><button type="button" id="export-diagnostics" class="text-tool">گزارش فنی</button></div>
@@ -90,7 +103,9 @@
             <div><dt>آستین‌ها</dt><dd id="fit-arms">—</dd></div>
             <div><dt>زمان تشخیص</dt><dd id="fit-speed" dir="ltr">—</dd></div>
             <div><dt>رندر</dt><dd id="fit-render" dir="ltr">—</dd></div>
-            <div><dt>شواهد فیت</dt><dd id="fit-depth">—</dd></div>
+            <div><dt>مش و عمق</dt><dd id="fit-depth">—</dd></div>
+            <div><dt>اصلاح تماس پارچه</dt><dd id="fit-contact">—</dd></div>
+            <div><dt>میانگین کشش یال</dt><dd id="fit-strain">—</dd></div>
           </dl>
           <p id="fit-issue" hidden></p>
         </section>
@@ -130,7 +145,7 @@
     </div>
     <footer class="foot">
       <span><i data-icon="shield"></i> تصویر و اندازه‌ها روی دستگاهت پردازش می‌شوند</span>
-      <a href="https://github.com/prestigegitserp/VFR_base/tree/v4" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۴</a>
+      <a href="https://github.com/prestigegitserp/VFR_base/tree/v6" rel="noopener" target="_blank">کد و پروتکل نسخهٔ ۶</a>
     </footer>
   </main>
 
@@ -148,8 +163,8 @@
         <label>عرض پل بینی <span>میلی‌متر</span><input name="bridge" type="number" min="12" max="28" step="1"></label>
       </div>
       <label class="select-line">تن‌خور دلخواه <select id="fit-preference"><option value="regular">معمولی</option><option value="close">نزدیک به بدن</option><option value="relaxed">آزاد</option></select></label>
-      <p id="measure-hint" class="hint">برای سفارش، ابعاد را با متر بگیر یا فایل اسکنِ کالیبره وارد کن. برآورد دوربین با یک نمای روبه‌رو و یک نمای نیم‌رخ انجام می‌شود.</p>
-      <div class="dialog-actions"><button type="submit" class="primary">ذخیره اندازه‌ها</button><button type="button" id="scan-start" class="outline"><i data-icon="scan"></i> برآورد دو نما</button><button type="button" id="import-body" class="quiet">ورود اسکن بدن</button><button type="button" id="clear-measure" class="quiet">پاک‌کردن</button></div>
+      <p id="measure-hint" class="hint">برای مش دقیق‌تر، قد را وارد کن و با لباس نزدیک به بدن، نمای روبه‌رو و نیم‌رخ را ثبت کن. اندازه‌های مترخورده هم فرم مش را اصلاح می‌کنند.</p>
+      <div class="dialog-actions"><button type="submit" class="primary">ذخیره اندازه‌ها</button><button type="button" id="scan-start" class="outline"><i data-icon="scan"></i> اسکن دو نما</button><button type="button" id="import-body" class="quiet">ورود اسکن بدن</button><button type="button" id="clear-measure" class="quiet">پاک‌کردن</button></div>
       <input type="file" accept=".json,application/json" id="body-file" hidden>
     </form>
   </dialog>

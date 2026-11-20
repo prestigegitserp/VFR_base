@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as T from 'three';
 import { projection, referencePoints, solveHead } from '../src/camera-fit.js';
 import { solveBody } from '../src/body-volume.js';
+import { BodyMesh } from '../src/body-mesh.js';
+import { TwoViewScan } from '../src/sizing.js';
 import { makeLiveShell } from '../src/live-shell.js';
 import { subjectMask } from '../src/subject-mask.js';
 import { FittedStage } from '../src/fitted-stage.js';
@@ -99,7 +101,7 @@ test('the garment sockets share edges with the sleeves and the cuffs follow a be
       assert.equal(touches.get(key(vs[k].at,vs[(k+1)%vs.length].at)),2);
     }
     const cuff=V();
-    for(let k=0;k<vs.length;k++)cuff.add(V().fromBufferAttribute(pos,hole.offset+20*vs.length+k));
+    for(let k=0;k<vs.length;k++)cuff.add(V().fromBufferAttribute(pos,hole.offset+(shell.cuffRows-1)*vs.length+k));
     cuff.divideScalar(vs.length);
     assert.ok(cuff.distanceTo(local(rig.arms[i][2]))<.051);
   }
@@ -135,4 +137,99 @@ test('the face writes depth in front of the far-side eyewear arm',()=>{
   }).length);
   assert.ok(Math.max(...blocked)>=2 && Math.min(...blocked)<Math.max(...blocked),JSON.stringify(blocked));
   stage.clear();
+});
+
+function reconstruct(rig) {
+  const local = p => p.clone().sub(rig.origin).applyQuaternion(rig.q.clone().invert());
+  const arms = rig.arms.map(limb => limb.map(local));
+  const body = new BodyMesh(rig.volume.mode === 'full');
+  body.update(rig.volume, arms, rig.hands);
+  return { body, arms };
+}
+
+test('the exported body has a closed, oriented skin with welded torso, arms and pelvis', () => {
+  const upper = seatedFixture();
+  const full = { pose: upper.pose.map(p=>({...p,x:.5+(p.x-.5)*.46,y:.19+(p.y-.46)*.53})), head:null };
+  for(const [i,x,y,z] of [[23,.457,.476,.015],[24,.543,.475,-.019],[25,.453,.680,.021],
+    [26,.547,.685,-.02],[27,.446,.897,.044],[28,.565,.90,.067]]) {
+    full.pose[i]={x,y,z,visibility:.96};
+  }
+  for (const [mode,fixture] of [['upper',upper],['full',full]]) {
+    const rig = solveBody(fixture, mode, camera, fixture.head);
+    assert.ok(rig, mode);
+    const { body } = reconstruct(rig);
+    const index = body.geometry.index.array;
+    const count = new Map(), direction = new Map(), adjacent = new Map();
+    for (let i = 0; i < index.length; i += 3) {
+      for (let j = 0; j < 3; j++) {
+        const a = index[i+j], b = index[i+(j+1)%3], key = a < b ? a+':'+b : b+':'+a;
+        count.set(key, (count.get(key) ?? 0) + 1);
+        direction.set(key, (direction.get(key) ?? 0) + Math.sign(b-a));
+        if (!adjacent.has(a)) adjacent.set(a, []);
+        adjacent.get(a).push(b);
+      }
+    }
+    assert.ok([...count.values()].every(x => x === 2), mode);
+    assert.ok([...direction.values()].every(x => x === 0), mode);
+    const visited = new Set([index[0]]), search = [index[0]];
+    while (search.length) {
+      for (const i of adjacent.get(search.pop())) if (!visited.has(i)) { visited.add(i); search.push(i); }
+    }
+    assert.equal(visited.size, new Set(index).size);
+    assert.ok(body.collider.distance(0, -rig.volume.length*.53, -.01) < -.035);
+    assert.ok(body.collider.distance(0, -rig.volume.length*.53, body.geometry.boundingBox.max.z+.25) > .20);
+    const obj = body.obj();
+    assert.equal((obj.match(/^v /gm) ?? []).length, visited.size);
+    assert.equal((obj.match(/^f /gm) ?? []).length, index.length / 3);
+    body.dispose();
+  }
+});
+
+test('two torso views change the actual front-to-back depth and keep the sampled shape across poses', () => {
+  const fixture = seatedFixture(), scan = new TwoViewScan(1740);
+  const dimensions = [335, 350, 367, 382, 363, 336, 315, 330, 361, 380];
+  const side = [180, 198, 216, 235, 224, 208, 193, 225, 238, 245];
+  const frame = series => ({ profile:series, torso:445, shoulder:420, chest:series[3], waist:series[6], hip:series.at(-1) });
+  scan.front = Array.from({ length:8 }, () => frame(dimensions));
+  scan.side = Array.from({ length:8 }, () => frame(side));
+  scan.view = 'complete';
+  const slim = scan.result();
+  scan.side = scan.side.map(() => frame(side.map(value=>value+72)));
+  const deep = scan.result();
+  const a = solveBody(fixture,'upper',camera,fixture.head,slim);
+  const b = solveBody(fixture,'upper',camera,fixture.head,deep);
+  assert.equal(a.volume.source,'two-view');
+  assert.ok(Math.abs(a.volume.rings[3].rx-b.volume.rings[3].rx)<1e-6);
+  assert.ok(b.volume.rings[3].rz-a.volume.rings[3].rz>.030);
+  const moved = {...fixture, pose:fixture.pose.map(p=>({...p,x:p.x+.072})), head:null};
+  const second = solveBody(moved,'upper',camera,null,deep);
+  assert.equal(second.volume.rings[3].rz,b.volume.rings[3].rz);
+  assert.notEqual(second.origin.x,b.origin.x);
+});
+
+test('body contact resolves penetration of a fitted garment and size changes retain different patterns', () => {
+  const fixture = seatedFixture(), rig = solveBody({...fixture,mask:null},'upper',camera,fixture.head);
+  const { body, arms } = reconstruct(rig);
+  const item = catalog.find(x=>x.id==='orion'), small = item.sizes[0], large = item.sizes.at(-1);
+  const sizes = [small,large].map(size=>makeLiveShell(item,size,0));
+  const circumference = [];
+  for (const cloth of sizes) {
+    cloth.update(rig.volume,arms,0,1/30,false,rig.origin,{ quick:true, collider:body.collider });
+    const index = new Set(cloth.shell.geometry.index.array);
+    const vertices = cloth.shell.geometry.attributes.position;
+    const inside = [...index].map(i=>body.collider.distance(vertices.getX(i),vertices.getY(i),vertices.getZ(i)))
+      .filter(d=>d<-.009);
+    const report = cloth.stats();
+    assert.ok(inside.length/index.size<.023, `${cloth===sizes[0]?'small':'large'}: ${inside.length}/${index.size}; min ${Math.min(...inside)}`);
+    assert.ok(report.contacts>0);
+    const row = 48*11;
+    let ring = 0;
+    for (let i=0;i<48;i++) {
+      ring+=V().fromBufferAttribute(vertices,row+i).distanceTo(V().fromBufferAttribute(vertices,row+(i+1)%48));
+    }
+    circumference.push(ring);
+    cloth.dispose();
+  }
+  assert.ok(circumference[1]-circumference[0]>.040,JSON.stringify(circumference));
+  body.dispose();
 });

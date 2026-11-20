@@ -73,8 +73,9 @@ export class VisionCore {
     }
     const upperShoulders=pose?.slice(11,13);
     const missingShoulders = !upperShoulders?.length || upperShoulders.some(p => (p.visibility??0)<.52 || p.y>.99 || p.x<0 || p.x>1);
-    const headAttempted=mode==='face'||mode==='upper'&&(headHint||method==='IMAGE'||fallback&&missingShoulders);
-    if(mode==='upper'&&headAttempted){
+    const fullFace=mode==='full'&&(headHint||method==='IMAGE')&&pose?.[0]?.visibility>.65;
+    const headAttempted=mode==='face'||fullFace||mode==='upper'&&(headHint||method==='IMAGE'||fallback&&missingShoulders);
+    if(mode!=='face'&&headAttempted){
       try{
         const detector=await this.task('face',method);
         const output=run(detector.task);

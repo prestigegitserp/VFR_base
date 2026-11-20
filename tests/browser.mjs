@@ -31,7 +31,7 @@ const headers={'.html':'text/html','.js':'text/javascript','.css':'text/css','.j
   '.wasm':'application/wasm','.webp':'image/webp','.woff2':'font/woff2','.svg':'image/svg+xml'};
 const server=createServer(async(req,res)=>{
   try{
-    const relative=new URL(req.url,'http://localhost').pathname.replace(/^\/VFR_base\/v4\//,'');
+    const relative=new URL(req.url,'http://localhost').pathname.replace(/^\/VFR_base\/v6\//,'');
     const path=resolve(root,relative||'index.html');
     if(!path.startsWith(root+'/')||!(await stat(path)).isFile())throw new Error('not found');
     res.writeHead(200,{'content-type':headers[extname(path)]??'application/octet-stream'});
@@ -39,7 +39,7 @@ const server=createServer(async(req,res)=>{
   }catch{res.writeHead(404).end();}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
-const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v4/';
+const url='http://127.0.0.1:'+server.address().port+'/VFR_base/v6/';
 let instance;
 try{
   const launch=(input)=>chromium.launch({headless:true,executablePath:process.env.VFR_CHROMIUM,args:[
@@ -137,7 +137,7 @@ try{
     const capturedReport=page.waitForEvent('download');
     await page.locator('#export-diagnostics').click();
     const report=await capturedReport;
-    assert.equal(report.suggestedFilename(),'VFR-v4-diagnostics.json');
+    assert.equal(report.suggestedFilename(),'VFR-v6-diagnostics.json');
     const diag=JSON.parse(await readFile(await report.path(),'utf8'));
     assert.ok(!JSON.stringify(diag).includes('landmarks') && !('photo' in diag));
     await page.locator('#inspect').click();
@@ -150,9 +150,11 @@ try{
   await page.locator('#photo-file').setInputFiles(photo);
   await expectSignal('پرو روی عکس');
   assert.equal(await page.locator('#stage').getAttribute('data-mask'),'ready');
-  await page.locator('#stage[data-matte=active][data-fit=locked]').waitFor();
+  await page.locator('#stage[data-matte=active][data-fit=locked][data-cloth=drape]').waitFor();
   assert.ok((await overlay()).count>160);
-  console.log('OK: full-body pose and multiclass foreground mask');
+  const fullCount=Number(await page.locator('#stage').getAttribute('data-body-mesh'));
+  assert.ok(fullCount>2500, String(fullCount));
+  console.log('OK: full-body pose, articulated skin and multiclass foreground mask',fullCount);
   await page.locator('button[data-frame=upper]').click();
   await page.locator('.look[data-look=meridian]').click();
   await page.locator('#photo-file').setInputFiles(upper);
@@ -179,6 +181,8 @@ try{
   await preview('orion');
   const diag=await openDiagnostics();
   assert.ok(diag.mask && diag.source==='photo' && diag.trackingScore>=50);
+  assert.equal(diag.clothModel,'drape');
+  assert.ok(diag.bodyTriangles>2000 && diag.clothVertices>1500 && diag.contactCorrections>0);
   console.log('OK: cropped photo has fitted pixels, alignment and mask controls, sanitized diagnostics',initial,adjusted);
   await page.locator('#photo-file').setInputFiles(close);
   const closeWidth=jpeg.decode(await readFile(close)).width;
@@ -193,7 +197,10 @@ try{
   await page.locator('#stage[data-view=model]').waitFor();
   const render=page.locator('#render');
   const front=jpeg.decode(await render.screenshot({type:'jpeg',quality:82}));
-  await page.locator('#orbit-angle').press('End');
+  await page.locator('#orbit-angle').evaluate(input=>{
+    input.value='77';
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  });
   const side=jpeg.decode(await render.screenshot({type:'jpeg',quality:82}));
   let changed=0;
   for(let i=0;i<front.data.length;i+=24){
@@ -201,9 +208,25 @@ try{
   }
   assert.ok(changed>420,JSON.stringify({changed}));
   await preview('orbit');
+  await page.locator('#orbit-mode').selectOption('body');
+  await page.locator('#orbit-angle').press('End');
+  await preview('skin');
+  const exported=page.waitForEvent('download');
+  await page.locator('#export-body').click();
+  const mesh=await exported;
+  assert.equal(mesh.suggestedFilename(),'VFR-v6-body.obj');
+  const obj=await readFile(await mesh.path(),'utf8');
+  assert.ok((obj.match(/^v /gm)??[]).length>990 && (obj.match(/^f /gm)??[]).length>2000);
+  await page.locator('#orbit-mode').selectOption('strain');
+  await page.locator('#strain-key').waitFor();
+  await page.locator('#orbit-angle').evaluate(input=>{
+    input.value='24';
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  });
+  await preview('strain');
   await page.locator('#view-volume').click();
   await page.locator('#stage[data-view=image]').waitFor();
-  console.log('OK: near-camera upper torso and actual side-view pixel changes',changed);
+  console.log('OK: cropped torso, changing 3D viewpoints, body OBJ and cloth strain inspection',changed);
   await page.locator('button[data-frame=face]').click();
   await page.locator('#photo-file').setInputFiles(portrait);
   await expectSignal('پرو روی عکس');

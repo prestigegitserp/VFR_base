@@ -23,11 +23,11 @@ const el=(tag,content,cls)=>{
 const stage=$('stage'), video=$('video'), img=$('photo'), canvas=$('render'), ctx=$('foreground').getContext('2d');
 const cameraFrame=$('camera-frame'), sampleFrame=document.createElement('canvas');
 const cameraPixels=cameraFrame.getContext('2d',{alpha:false}), samplePixels=sampleFrame.getContext('2d',{alpha:false});
-const storage='vfr-atelier:v4:';
+const storage='vfr-atelier:v6:';
 try{
   if(!localStorage.getItem(storage+'initialized')){
     for(const key of ['profile','preference','cart']){
-      const old=localStorage.getItem('vfr-atelier:v3:'+key)??localStorage.getItem('vfr-atelier:v2:'+key);
+      const old=['v5','v4','v3','v2'].map(v=>localStorage.getItem('vfr-atelier:'+v+':'+key)).find(v=>v!=null);
       if(old!=null&&localStorage.getItem(storage+key)==null)localStorage.setItem(storage+key,old);
     }
     localStorage.setItem(storage+'initialized','true');
@@ -46,7 +46,7 @@ const state={
   move:!reduce,wind:false,turn:0,zoom:1,high:false,mirror:true,occlusion:true,debug:false,split:0,splitAt:50,apply:false,
   coverage:'balanced',response:'steady',camera:'user',alignment:{full:emptyAlignment(),upper:emptyAlignment(),face:emptyAlignment()},
   busy:false,ready:false,tracked:null,mask:null,headFrame:null,faceProbe:0,delegate:'',lastInfer:0,poseMs:0,maskMs:0,
-  light:.50,scan:null,issue:'',lens:63,inspection:null,orbit:0,
+  light:.50,scan:null,issue:'',lens:63,inspection:null,orbit:0,orbitMode:'fit',shapeHistory:{},
   sync:'matched',capturedAt:0,paintedAt:0,
 };
 const vision=new Vision(), smoothPose=new Temporal(), smoothWorld=new Temporal(), smoothFace=new Temporal([33,263]);
@@ -190,6 +190,10 @@ function controls(){
   $('view-volume').disabled=!supported||!state.ready||(!stable?.rig&&!state.inspection);
   press($('view-volume'),Boolean(state.inspection));
   $('orbit-tools').hidden=!state.inspection;
+  $('body-views').hidden=!state.inspection||state.mode==='face';
+  $('orbit-mode').querySelector('[value=strain]').disabled=state.item.source==='scan';
+  $('orbit-mode').value=state.orbitMode;
+  $('strain-key').hidden=!state.inspection||state.orbitMode!=='strain';
   stage.dataset.view=state.inspection?'model':'image';
   if(demo&&$('alignment-dialog').open)$('alignment-dialog').close();
   press($('inspect'),state.debug);
@@ -231,6 +235,7 @@ async function updateLook(updateForm) {
 function select(item,adjust=true){
   state.item=item;state.size=chooseSize(item,state.body,state.preference)?.size??startingSize(item);
   state.color=0;state.wind=false;
+  if(item.source==='scan'&&state.orbitMode==='strain')state.orbitMode='fit';
   if(!state.formPinned){state.formId=item.form;$('form-select').value=item.form;}
   if(adjust&&!compatible(item,state.mode))changeFrame(item.frame,false);
   product();controls();
@@ -246,7 +251,7 @@ function resetVision() {
   state.ready=false;state.tracked=null;state.mask=null;
   state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.delegate='';state.issue='';
   projection=null;headProjection=null;stable=null;state.headFrame=null;state.faceProbe=0;
-  state.inspection=null;state.orbit=0;
+  state.inspection=null;state.orbit=0;state.orbitMode='fit';state.shapeHistory={};
   state.capturedAt=state.paintedAt=0;
   stage.dataset.sync='direct';cameraFrame.hidden=true;
   ctx.save();ctx.resetTransform();ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.restore();
@@ -255,6 +260,7 @@ function resetVision() {
   stage.dataset.depth='none';
   stage.dataset.matte='off';
   delete stage.dataset.mask;delete stage.dataset.vision;delete stage.dataset.landmarks;
+  delete stage.dataset.bodyMesh;delete stage.dataset.bodyShape;delete stage.dataset.cloth;
   smoothPose.clear();smoothWorld.clear();smoothFace.clear();
   lastFrame=-1;
   guide(null);message();
@@ -450,9 +456,14 @@ function applyTracking(result,at,matched=false){
   if(state.scan&&mask&&pose){
     const [w,h]=mediaSize(video);
     const next=state.scan.sensor;
-    next.ingest(pose,mask,w/h);
+    next.ingest(pose,state.mask.frame,w/h);
     const profile=next.result();
-    if(profile){state.body=profile;state.scan=null;put('profile',profile);fitBadge();toast('برآورد روبه‌رو و نیم‌رخ ذخیره شد.');}
+    if(profile){
+      const measured=Object.entries(state.body?.measures??{}).filter(([key,m])=>key!=='height'&&m.uncertainty<=26);
+      Object.assign(profile.measures,Object.fromEntries(measured));
+      state.body=profile;state.scan=null;state.shapeHistory={};put('profile',profile);fitBadge();
+      toast('فرم مش از اندازه‌های روبه‌رو و نیم‌رخ به‌روز شد.');
+    }
   }
 }
 
@@ -482,7 +493,7 @@ function project(now=performance.now()) {
   if(headProjection?.face!==tracked.face||headProjection?.bounds!==bounds||headProjection?.lens!==state.lens||headProjection?.eye!==eye){
     headProjection={face:tracked.face,bounds,lens:state.lens,eye,rig:solveHead(tracked.face,camera,eye)};
   }
-  const rig=state.mode==='face'?headProjection.rig:solveBody({...tracked,mask,maskShift:usable?.shift},state.mode,camera,headProjection.rig,state.body);
+  const rig=state.mode==='face'?headProjection.rig:solveBody({...tracked,mask,maskShift:usable?.shift,shapeHistory:state.source==='live'?state.shapeHistory:null},state.mode,camera,headProjection.rig,state.body);
   if(rig&&usable)rig.maskShift=usable.shift;
   projection={tracked,mask,bounds,lens:state.lens,body:state.body,rig};
   rigRevision++;
@@ -491,6 +502,7 @@ function project(now=performance.now()) {
 
 function fittedFrame(now){
   if(state.inspection)return state.inspection;
+  if(state.scan)return {rig:null,mask:null,alpha:0,status:'none'};
   const age=now-(state.tracked?.at??0);
   const maxAge=clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
   const live=state.source==='live';
@@ -514,7 +526,7 @@ function sense(now){
   pending=true;lastFrame=video.currentTime;resultTime=now;
   const id=operation, mode=state.mode, syncId=syncChange;
   const masks=semantic()&&(state.scan||!state.mask||now-state.mask.at>clamp(state.maskMs*1.31+69,105,315));
-  const headHint=mode==='upper'&&now-state.faceProbe>clamp(state.poseMs*.96+102,136,320);
+  const headHint=!state.scan&&mode!=='face'&&now-state.faceProbe>(mode==='upper'?clamp(state.poseMs*.96+102,136,320):950);
   const matched=state.sync==='matched';
   if(matched){
     const scale=Math.min(1,1280/Math.max(video.videoWidth,video.videoHeight));
@@ -595,7 +607,8 @@ let recentStats;
 function diagnostics(now,result){
   const rig=result.rig;
   const media=source(),[w,h]=mediaSize(media);
-  recentStats={version:4,source:state.source,frame:state.mode,status:result.status,
+  const fit=rig?.volume&&studio?studio.fitted.report():null;
+  recentStats={version:6,source:state.source,frame:state.mode,status:result.status,
     anchor:rig?.kind??null,trackingScore:rig?Math.round(rig.quality*100):null,
     yaw:rig?Math.round(rig.yaw*180/Math.PI):null,arms:rig?.armQuality?.map(x=>x>=.55?'tracked':'estimated')??null,
     mask:!!result.mask,maskAgeMs:result.mask&&state.source==='live'?ms(now-state.mask?.at):null,
@@ -603,10 +616,13 @@ function diagnostics(now,result){
     dimensions:media?[w,h]:null,detectorMs:ms(state.poseMs),maskMs:ms(state.maskMs),
     renderMs:ms(renderMs),fps,coverage:state.coverage,issue:state.issue||null,
     horizontalFov:state.lens,headFitPx:ms(rig?.reprojection??rig?.head?.reprojection),
-    shoulderContours:rig?.volume?.topCount??null,preview:state.inspection?'3d':'image',cameraSync:stage.dataset.sync};
+    shoulderContours:rig?.volume?.topCount??null,bodyShape:rig?.volume?.source??null,bodyTriangles:fit?.triangles??null,
+    clothModel:fit?.mode??null,clothVertices:fit?.vertices??null,contactCorrections:fit?.contacts??null,
+    maxCorrectionMm:fit?.maxCorrection==null?null:ms(fit.maxCorrection*1000),meanEdgeStretch:fit?.stretch??null,
+    preview:state.inspection?state.orbitMode:'image',cameraSync:stage.dataset.sync};
   if(!state.debug)return;
   $('fit-health').textContent=state.source==='studio'?'مانکن':statusLabels[result.status];
-  $('fit-anchor').textContent=({face:'بینی و مش صورت',body:'مفصل و حجم تنه',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
+  $('fit-anchor').textContent=({face:'بینی و مش صورت',body:'مفصل، سیلوئت و مش بدن',estimate:'چهره و سیلوئت'})[rig?.kind]??'—';
   $('fit-score').textContent=rig?show(recentStats.trackingScore):'—';
   $('fit-yaw').textContent=rig?`${show(recentStats.yaw)}°`:'—';
   $('fit-mask').textContent=result.mask?(state.source==='photo'?'آماده':`${show(recentStats.maskAgeMs)} ms`):'—';
@@ -614,10 +630,12 @@ function diagnostics(now,result){
   $('fit-speed').textContent=state.delegate?`${state.delegate} / ${Math.round(state.poseMs)} ms`:'—';
   $('fit-render').textContent=state.source==='live'?`${ms(renderMs)} ms / ${fps} FPS`:`${ms(renderMs)} ms`;
   $('fit-depth').textContent=rig?.kind==='face'?`${show(recentStats.headFitPx)} پیکسل خطای تصویر`:
-    rig?.volume?`${show(rig.volume.topCount)} از ۲ لبهٔ سرشانه`:'—';
+    fit?.triangles?`${show(fit.triangles)} مثلث · ${({image:'برآورد تصویر',measured:'با پروفایل', 'two-view':'اسکن دو نما'})[rig.volume.source]}`:'—';
+  $('fit-contact').textContent=fit?.contacts==null?'—':`${show(fit.contacts)} اصلاح در آخرین به‌روزرسانی`;
+  $('fit-strain').textContent=fit?.stretch==null?'—':`${show(fit.stretch*100)}٪`;
   const issue=$('fit-issue');
   const problem=state.issue?'یکی از اجزای تشخیص آماده نیست. برای جزئیات، گزارش را بگیر.':
-    state.item.source==='scan'?'مدل اسکن‌شده به نقاط مرجع بدن متصل می‌شود. حرکت آستین به مدل استخوان‌بندی‌شده نیاز دارد.':'';
+    fit?.mode==='scanned'?'این GLB در حالت تراز با نقاط مرجع نمایش داده می‌شود.':'';
   issue.hidden=!problem;issue.textContent=problem;
 }
 function animate(now){
@@ -660,7 +678,7 @@ function animate(now){
   const key=(!live||inspection)&&(demo?!state.move&&!state.wind:!state.wind)
     ? [display,studio.wear?.group.uuid,studio.avatar?.model.uuid,bounds.w,bounds.h,state.source,rigRevision,
       state.split,state.splitAt,state.turn,state.zoom,state.mode,state.high,state.debug,state.coverage,state.occlusion,
-      inspection,state.orbit,mirrored(),...Object.values(adjustment)].join('|')
+      inspection,state.orbit,state.orbitMode,mirrored(),...Object.values(adjustment)].join('|')
     : null;
   if(key&&key===renderKey)return;
   renderKey=key;lastPaint=now;
@@ -671,7 +689,17 @@ function animate(now){
   if(media&&(!live||frame%12===1))light(media,rig);
   const started=performance.now();
   studio.update({dt,time:now,mode:state.mode,rig,move:state.move,wind:state.wind,turn:state.turn,zoom:state.zoom,
-    lightValue:state.light,reduce,adjustment,mirror:mirrored(),orbit:inspection?state.orbit:null});
+    lightValue:state.light,reduce,adjustment,mirror:mirrored(),orbit:inspection?state.orbit:null,orbitMode:state.orbitMode,
+    quick:live&&!state.high});
+  const fitted=rig?.volume?studio.fitted.report():null;
+  if(fitted?.triangles){
+    const triangles=String(fitted.triangles);
+    if(stage.dataset.bodyMesh!==triangles)stage.dataset.bodyMesh=triangles;
+    if(stage.dataset.bodyShape!==rig.volume.source)stage.dataset.bodyShape=rig.volume.source;
+    if(stage.dataset.cloth!==fitted.mode)stage.dataset.cloth=fitted.mode??'none';
+  }else if(stage.dataset.bodyMesh){
+    delete stage.dataset.bodyMesh;delete stage.dataset.bodyShape;delete stage.dataset.cloth;
+  }
   studio.draw(state.split&&!inspection?state.splitAt/100:0);
   if(!demo&&!inspection)compositor.draw(ctx,studio,{rect,mirror:mirrored(),mask,rig,alpha,debug:state.debug,cut:state.item.cut,
     tailored:state.item.cut==='coat'||state.item.cut==='jacket'&&state.item.id!=='orion',coverage:state.coverage,occlusion:state.occlusion});
@@ -725,12 +753,33 @@ $('view-volume').addEventListener('click',()=>{
   }else{
     const frame=fittedFrame(performance.now());
     if(!frame.rig)return;
-    state.inspection=frame;state.orbit=0;$('orbit-angle').value='0';
+    state.inspection=frame;state.orbitMode='fit';setOrbit(0);
     message();guide(null);
   }
   renderKey=null;controls();
 });
-$('orbit-angle').addEventListener('input',e=>{state.orbit=Number(e.currentTarget.value);});
+function setOrbit(angle){
+  state.orbit=angle;
+  $('orbit-angle').value=String(angle);$('orbit-value').textContent=show(angle)+'°';
+}
+$('orbit-angle').addEventListener('input',e=>setOrbit(Number(e.currentTarget.value)));
+$('orbit-mode').addEventListener('change',e=>{state.orbitMode=e.currentTarget.value;controls();});
+$('export-body').addEventListener('click',()=>{
+  const obj=state.inspection&&studio?.fitted.bodyObj();
+  if(obj)download(new Blob([obj],{type:'text/plain'}),'VFR-v6-body.obj');
+});
+let drag=null;
+stage.addEventListener('pointerdown',e=>{
+  if(!state.inspection||e.button!==0||e.target.closest('button'))return;
+  stage.setPointerCapture(e.pointerId);
+  drag={id:e.pointerId,x:e.clientX,angle:state.orbit};
+});
+stage.addEventListener('pointermove',e=>{
+  if(drag?.id!==e.pointerId||!state.inspection)return;
+  const next=drag.angle+(drag.x-e.clientX)*.52;
+  setOrbit(Math.round((((next+180)%360)+360)%360-180));
+});
+stage.addEventListener('lostpointercapture',()=>{drag=null;});
 
 $$('button[data-source]').forEach(b=>b.addEventListener('click',()=>{
   const next=b.dataset.source;
@@ -784,7 +833,7 @@ $('debug').addEventListener('change',e=>setDebug(e.currentTarget.checked));
 $('inspect').addEventListener('click',()=>setDebug(!state.debug));
 $('export-diagnostics').addEventListener('click',()=>{
   const now=performance.now();diagnostics(now,gpu()?fittedFrame(now):{status:'none'});
-  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v4-diagnostics.json');
+  download(new Blob([JSON.stringify(recentStats,null,2)],{type:'application/json'}),'VFR-v6-diagnostics.json');
 });
 const alignmentInputs=$$('[data-align]');
 function syncAlignment(){
@@ -810,7 +859,7 @@ $('apply-profile').addEventListener('change',e=>{state.apply=e.currentTarget.che
 
 const getFields=()=>$('measurement-form').elements;
 const scale=(k)=>['eye','bridge'].includes(k)?1:10;
-const bodyMethods={manual:'اندازه‌های ثبت‌شده با متر',scan:'اندازه‌های فایل اسکن واردشده',camera:'برآورد دو نمای دوربین'};
+const bodyMethods={manual:'اندازه‌های ثبت‌شده با متر',scan:'اندازه‌های فایل اسکن واردشده',camera:'اندازه‌های برآوردی از روبه‌رو و نیم‌رخ'};
 function fillMeasurements(){
   const fields=getFields(), body=state.body;
   for(const key of Object.keys(metrics))fields.namedItem(key).value=body?.measures?.[key]?Number((body.measures[key].value/scale(key)).toFixed(1)):'';
@@ -825,11 +874,12 @@ $('measurement-form').addEventListener('submit',(e)=>{
   const keep=state.body;
   if(keep){
     let retained=false;
+    if(keep.shape&&profile.measures.height?.value===keep.measures.height?.value)profile.shape=keep.shape;
     for(const [key,m] of Object.entries(profile.measures)){
       const old=keep.measures[key];
       if(old && Math.abs(old.value-m.value)<.11){profile.measures[key]=old;retained=true;}
     }
-    if(retained)profile.method=keep.method;
+    if(retained&&!Object.entries(profile.measures).some(([k,m])=>keep.measures[k]!==m))profile.method=keep.method;
   }
   state.body=Object.keys(profile.measures).length?profile:null;
   state.preference=$('fit-preference').value;

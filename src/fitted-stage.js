@@ -2,10 +2,9 @@ import * as T from 'three';
 import { clamp } from './catalog.js';
 import { faceTriangles } from './camera-fit.js';
 import { makeLiveShell } from './live-shell.js';
+import { BodyMesh } from './body-mesh.js';
 
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
-const forward = V(0, 0, 1);
-const vertical = V(0, 1, 0);
 const tau = Math.PI * 2;
 
 function sphere(parent, geometry, material) {
@@ -15,15 +14,6 @@ function sphere(parent, geometry, material) {
   mesh.frustumCulled = false;
   parent.add(mesh);
   return mesh;
-}
-
-function capsule(mesh, a, b, width, depth = width) {
-  const d = b.clone().sub(a);
-  const length = d.length();
-  mesh.position.copy(a).lerp(b, .5);
-  mesh.quaternion.setFromUnitVectors(vertical, length > .0005 ? d.divideScalar(length) : vertical);
-  mesh.scale.set(width, length / 2 + width * .62, depth);
-  mesh.visible = true;
 }
 
 function curveTube(points, radius, material, closed = false) {
@@ -119,10 +109,14 @@ export class FittedStage {
     this.head = sphere(this.group, this.face, this.depth);
     this.skull = sphere(this.group, this.sphere, this.proxy);
     this.skull.renderOrder = -4;
-    this.neck = sphere(this.body, this.sphere, this.depth);
-    this.trunk = Array.from({ length: 4 }, () => sphere(this.body, this.sphere, this.depth));
-    this.limbs = Array.from({ length: 8 }, () => sphere(this.body, this.sphere, this.depth));
-    this.occluders = [this.head, this.neck, ...this.trunk, ...this.limbs];
+    this.bodyMeshes = [new BodyMesh(false), new BodyMesh(true)];
+    this.skin = sphere(this.body, this.bodyMeshes[0].geometry, this.depth);
+    this.skin.name = 'Reconstructed articulated body';
+    this.wire = sphere(this.body, this.bodyMeshes[0].geometry, new T.MeshBasicMaterial({
+      color: '#e7c9a4', wireframe: true, opacity: .27, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1,
+    }));
+    this.wire.name = 'Body triangulation';
+    this.wire.renderOrder = 3;
     this.camera = new T.PerspectiveCamera(45, 1, .12, 12);
   }
 
@@ -154,83 +148,105 @@ export class FittedStage {
     }
   }
 
-  poseBody(rig, local, arms, inspection) {
-    this.body.position.copy(rig.origin);
-    this.body.quaternion.copy(rig.q);
-    const { neck, length, width, rings } = rig.volume;
-    const base = neck.center.clone().add(V(0, -.031, -.003));
-    capsule(this.neck, base, neck.joint, neck.rx * .89, neck.rz * .83);
-    rings.forEach((ring, i) => {
-      const mesh = this.trunk[i];
-      mesh.visible = !inspection || this.item.cut === 'dress' || this.item.cut === 'skirt';
-      mesh.position.copy(ring.center);
-      mesh.scale.set(ring.rx * .93, length * (i === 0 ? .149 : .215), ring.rz * .90);
-    });
-    const bareSleeves = this.item.cut === 'dress' || this.item.cut === 'skirt';
-    arms.forEach((chain, i) => {
-      capsule(this.limbs[i * 2], chain[0], chain[1], width * .102, width * .091);
-      capsule(this.limbs[i * 2 + 1], chain[1], chain[2], width * .076, width * .068);
-      for (const limb of this.limbs.slice(i * 2, i * 2 + 2)) limb.visible = bareSleeves;
-    });
-    rig.hands.forEach((hand, i) => {
-      capsule(this.limbs[4 + i], hand.wrist, hand.palm, hand.radius, hand.radius * .76);
-      this.limbs[4 + i].visible = inspection || hand.front > .13;
-    });
-    if (inspection && rig.leg.length) {
-      rig.leg.forEach((l, i) => capsule(this.limbs[6 + i], local(l[0]), local(l[2]), width * .098));
-    }
+  reset() {
+    this.changed = null;
+    this.activeBody = null;
+    this.product?.reset?.();
+    this.fitAt = 0;
   }
 
-  update({ rig, mirror, adjustment, orbit, width, height, time, dt, breeze, scanned }) {
+  report() {
+    const mesh = this.activeBody?.geometry;
+    return { triangles: mesh ? mesh.index.count / 3 : 0,
+      mode: this.product?.stats?.() ? 'drape' : this.scannedMode ?? null,
+      ...(this.product?.stats?.() ?? this.scannedStats ?? {}) };
+  }
+
+  bodyObj() { return this.activeBody?.obj() ?? null; }
+
+  update({ rig, mirror, adjustment, orbit, orbitMode = 'fit', width, height, time, dt, breeze, scanned, quick = false }) {
     this.group.visible = Boolean(rig);
     const cam = this.camera;
     if (!rig) return cam;
     const mode = rig.kind === 'face' ? 'face' : 'body';
     const inspection = orbit !== null;
-    const adjustId = [adjustment.x, adjustment.y, adjustment.width, adjustment.length, adjustment.depth, inspection, mirror].join('/');
-    const changed = rig !== this.changed || this.adjustId !== adjustId;
-    this.changed = rig; this.adjustId = adjustId;
-    this.inspecting = inspection;
+    const bodyOnly = inspection && orbitMode === 'body' && mode === 'body';
+    const strain = inspection && orbitMode === 'strain' && mode === 'body';
+    const adjustId = [adjustment.x, adjustment.y, adjustment.width, adjustment.length, adjustment.depth].join('/');
+    const poseChanged = rig !== this.changed;
+    const viewChanged = this.inspecting !== inspection;
+    const adjustmentChanged = this.adjustId !== adjustId;
+    this.changed = rig; this.adjustId = adjustId; this.inspecting = inspection;
     this.group.scale.x = mirror ? -1 : 1;
     const wear = this.product ?? scanned;
-    if (wear && wear.group.parent !== this.overlay) this.overlay.add(wear.group);
-    if (wear) wear.group.visible = true;
-    this.occluders.forEach(mesh => {
-      mesh.material = inspection ? this.proxy : this.depth;
-      if (changed) mesh.visible = false;
-    });
-    if(changed)this.skull.visible=false;
+    const productGroup = wear?.fittedGroup ?? wear?.group;
+    if (productGroup && productGroup.parent !== this.overlay) this.overlay.add(productGroup);
+    if (productGroup) productGroup.visible = !bodyOnly;
+    this.head.material = inspection ? this.proxy : this.depth;
+    this.skin.material = inspection ? this.proxy : this.depth;
+    this.wire.visible = bodyOnly;
     this.overlay.position.set(0, 0, 0); this.overlay.quaternion.identity(); this.overlay.scale.setScalar(1);
+
     if (mode === 'face') {
-      if (changed) {
-        this.maskHead(rig);
-        this.product?.fit(rig, adjustment);
-      }
+      this.skin.visible = false;
+      this.activeBody = null;
+      this.scannedMode = null;
+      this.scannedStats = null;
+      if (poseChanged || viewChanged) this.maskHead(rig);
+      if (poseChanged || adjustmentChanged) this.product?.fit(rig, adjustment);
     } else {
       const { volume } = rig;
+      this.skin.visible = true;
+      const mesh = this.bodyMeshes[volume.mode === 'full' ? 1 : 0];
       const inv = rig.q.clone().invert();
-      const local = p => p.clone().sub(rig.origin).applyQuaternion(inv);
-      if (changed) {
-        this.maskHead(rig.head);
-        this.poseBody(rig, local, rig.arms.map(chain => chain.map(local)), inspection);
+      if (poseChanged || mesh !== this.activeBody) {
+        this.localArms = rig.arms.map(chain => chain.map(p => p.clone().sub(rig.origin).applyQuaternion(inv)));
+        mesh.update(volume, this.localArms, rig.hands);
+        this.body.position.copy(rig.origin);
+        this.body.quaternion.copy(rig.q);
+        this.skin.geometry = this.wire.geometry = mesh.geometry;
+        if (mesh !== this.activeBody) this.product?.reset?.();
+        this.activeBody = mesh;
       }
-      const shift = V(volume.width * adjustment.x / 100, -volume.width * adjustment.y / 100, adjustment.depth * .001);
-      this.overlay.position.copy(shift.applyQuaternion(rig.q).add(rig.origin));
+      if (poseChanged || viewChanged) {
+        this.maskHead(rig.head);
+        if (!rig.head && inspection) {
+          const head = volume.neck.joint.clone().add(V(0, .068, -.009));
+          const unit = volume.width / .42;
+          this.skull.position.copy(head.applyQuaternion(rig.q).add(rig.origin));
+          this.skull.quaternion.copy(rig.q);
+          this.skull.scale.set(.069 * unit, .101 * unit, .071 * unit);
+          this.skull.visible = true;
+        }
+      }
+      this.overlay.position.copy(rig.origin);
       this.overlay.quaternion.copy(rig.q);
-      this.overlay.scale.set(1 + adjustment.width / 100, 1 + adjustment.length / 100, 1);
-      if (this.product && (changed || breeze)) {
-        this.product.update(volume, rig.arms.map(chain => chain.map(local)), time, dt, breeze, rig.origin);
+      this.product?.view?.(strain ? 'strain' : 'fit');
+      this.scannedMode = !this.product && scanned ? scanned.fitSurface ? 'scan-contact' : 'scanned' : null;
+      this.scannedStats = null;
+      if (this.product && (poseChanged || adjustmentChanged || breeze || !this.product.stats?.())) {
+        const gravity = V(0, -1, 0).applyQuaternion(inv).toArray();
+        const elapsed = this.fitAt ? clamp((time - this.fitAt) * .001, dt, .047) : dt;
+        this.fitAt = time;
+        this.product.update(volume, this.localArms, time, elapsed, breeze, rig.origin,
+          { collider: mesh.collider, adjustment, gravity, quick, settle: adjustmentChanged });
+      } else if (scanned?.fitSurface) {
+        if (poseChanged || adjustmentChanged || !scanned.surfaceStats) scanned.fitSurface(volume, this.localArms, mesh.collider, adjustment);
+        this.scannedStats = scanned.surfaceStats;
       } else if (scanned?.anchors) {
         const sx = clamp(volume.width / scanned.anchors.span, .70, 1.38);
         const sy = clamp(volume.length / scanned.anchors.torso, .71, 1.41);
-        this.overlay.scale.multiply(V(sx, sy, Math.sqrt(sx * sy)));
+        const shift = V(volume.width * adjustment.x / 100, -volume.width * adjustment.y / 100, adjustment.depth * .001);
+        this.overlay.position.add(shift.applyQuaternion(rig.q));
+        this.overlay.scale.set(sx * (1 + adjustment.width / 100), sy * (1 + adjustment.length / 100), Math.sqrt(sx * sy));
       }
     }
     if (inspection) {
       const center = rig.origin.clone();
       center.x *= mirror ? -1 : 1;
       const top = mode === 'face' ? rig.surface[10].y + .065 : (rig.head?.surface[10].y ?? center.y + .23) + .055;
-      const bottom = mode === 'face' ? rig.surface[152].y - .042 : center.y - (rig.full ? 1.02 : .66);
+      const lower = this.activeBody?.geometry.boundingBox?.min.y ?? -.62;
+      const bottom = mode === 'face' ? rig.surface[152].y - .042 : center.y + lower - .055;
       center.y = (top + bottom) / 2;
       const distance = Math.max(mode === 'face' ? .49 : 1.05, (top - bottom) / .67);
       const angle = orbit * Math.PI / 180;
