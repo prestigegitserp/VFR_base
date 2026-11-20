@@ -74,16 +74,15 @@ function sliceBand(mask, landmarkX, atY) {
 
 function foregroundEnd(mask, start, limit, sign) {
   const { data, w, h } = mask;
-  let best = limit;
   for (let y = start; sign * (limit - y) > 0; y += sign) {
     const row = clamp(Math.round(y * h), 1, h - 2) * w;
     let run = 0;
     for (let x = 2; x < w - 2; x++) {
       run = data[row + x] ? run + 1 : 0;
-      if (run >= 3) { best = y; break; }
+      if (run >= 3) return y;
     }
   }
-  return best;
+  return limit;
 }
 
 export function scanSample(points, mask, aspect, heightMm, side) {

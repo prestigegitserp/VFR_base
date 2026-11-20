@@ -37,7 +37,9 @@ function close(out, rim, end, top = false) {
 function buildTopology(full) {
   const arms = [socket(30, -1), socket(10, 1)], legs = [], indices = [];
   let next = count * levels.length;
+  let cervicalEnd = 0;
   for (let r = 0; r < levels.length - 1; r++) {
+    if (r === 3) cervicalEnd = indices.length;
     for (let c = 0; c < count; c++) {
       if (arms.some(s => s.top <= r && r < s.bottom && s.left <= c && c < s.right)) continue;
       quad(indices, at(r, c), at(r + 1, c), at(r, c + 1), at(r + 1, c + 1));
@@ -46,7 +48,9 @@ function buildTopology(full) {
   function attach(s, length) {
     let rim = s.rim;
     s.start = next;
+    s.faces = [];
     for (let r = 0; r < length; r++) {
+      s.faces.push(indices.length);
       const size = rim.length;
       for (let i = 0; i < size; i++) {
         const after = (i + 1) % size;
@@ -57,9 +61,12 @@ function buildTopology(full) {
     }
     s.end = next++;
     close(indices, rim, s.end);
+    s.faces.push(indices.length);
   }
   const collar = Array.from({ length: count }, (_, i) => at(0, i));
   const neckTop = next++;
+  const neckFaces = indices.slice(0, cervicalEnd);
+  close(neckFaces, collar, neckTop, true);
   close(indices, collar, neckTop, true);
   arms.forEach(s => attach(s, armRadii.length));
   const pelvis = Array.from({ length: count }, (_, i) => at(levels.length - 1, i));
@@ -73,7 +80,7 @@ function buildTopology(full) {
     seat = next++;
     close(indices, pelvis, seat);
   }
-  return { arms, legs, next, neckTop, seat, crotch, indices };
+  return { arms, legs, next, neckTop, seat, crotch, indices, neckFaces };
 }
 
 function tubeAxes(direction, front) {
@@ -102,6 +109,7 @@ export class BodyMesh {
     this.geometry.setAttribute('position', new BufferAttribute(this.points, 3).setUsage(DynamicDrawUsage));
     this.geometry.setIndex(indices);
     this.collider = new MeshContact(this.geometry.index.array);
+    this.depthSurfaces = new Map();
   }
 
   update(volume, arms, hands) {
@@ -148,7 +156,7 @@ export class BodyMesh {
       bottom.y -= length * .112;
       set(topology.seat, bottom);
     }
-    topology.arms.forEach((arm, i) => {
+    this.armFrames = topology.arms.map((arm, i) => {
       const [shoulder, elbow, wrist] = arms[i];
       const hand = hands.find(h => h.side === i);
       const along = wrist.clone().sub(elbow).normalize();
@@ -161,7 +169,13 @@ export class BodyMesh {
         .concat([elbow.clone().lerp(wrist,.28),elbow.clone().lerp(wrist,.66),wrist,palm,tip]);
       const base = clamp(volume.armRadii?.[i] ?? width * .133, .031, .101);
       const radii = armRadii.map((fraction, j) => j === wristAt + 1 ? across : j === wristAt + 2 ? across * .65 : base * fraction);
-      this.sweep(arm, centers, radii, arm.angles, upper, end, .85);
+      const frames = this.sweep(arm, centers, radii, arm.angles, upper, end, .85);
+      const length = shoulder.distanceTo(elbow) + elbow.distanceTo(wrist);
+      const proximal = shoulder.distanceTo(elbow) / Math.max(.001, length);
+      const knots = [.105,.22,.37,.54,.73,.92].map(t=>t*proximal)
+        .concat([blend(proximal,1,.28),blend(proximal,1,.66),1]);
+      return { frames, knots, shoulder, length };
+
     });
 
     if (this.full) {
@@ -207,12 +221,14 @@ export class BodyMesh {
     const seam = rim.map(id => V().fromArray(points, id * 3));
     const middle = seam.reduce((sum, point) => sum.add(point), V()).divideScalar(rim.length);
     let front = V(0, 0, 1);
+    const frames = [];
     for (let r = 0; r < centers.length; r++) {
       const center = centers[r];
       const direction = r === 0 ? firstDirection :
         centers[Math.min(r + 1, centers.length - 1)].clone().sub(centers[r - 1]).normalize();
       const basis = tubeAxes(direction, front);
       front = basis[0];
+      frames.push({ center, front, side:basis[1], direction, radius:radii[r] });
       const weight = r === 0 ? .35 : r === 1 ? .71 : 1;
       angles.forEach((a, i) => {
         const p = center.clone().addScaledVector(front, Math.cos(a) * radii[r] * oval)
@@ -222,6 +238,36 @@ export class BodyMesh {
       });
     }
     end.toArray(points, socket.end * 3);
+    return frames;
+  }
+
+  armFrame(side, t) {
+    const { frames, knots, shoulder, length } = this.armFrames[side];
+    const end = frames[wristAt];
+    if (t >= 1) return { ...end, center:end.center.clone().addScaledVector(end.direction,(t-1)*length) };
+    if (t <= knots[0]) return { ...frames[0], center:shoulder.clone().lerp(frames[0].center,t/knots[0]) };
+    let i = 1;
+    while (knots[i] < t) i++;
+    const a=frames[i-1], b=frames[i], u=(t-knots[i-1])/(knots[i]-knots[i-1]);
+    return { center:a.center.clone().lerp(b.center,u), front:a.front.clone().lerp(b.front,u).normalize(),
+      side:a.side.clone().lerp(b.side,u).normalize(), radius:blend(a.radius,b.radius,u) };
+  }
+
+  depthSurface(bareArms, leftHand, rightHand) {
+    const key = [bareArms,leftHand,rightHand].join('/');
+    if (!this.depthSurfaces.has(key)) {
+      const { indices, neckFaces, arms } = this.topology;
+      const visible = [leftHand, rightHand];
+      const used = neckFaces.slice();
+      arms.forEach((arm, i) => {
+        if (bareArms || visible[i]) used.push(...indices.slice(arm.faces[bareArms ? 0 : wristAt + 1], arm.faces.at(-1)));
+      });
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position',this.geometry.attributes.position);
+      geometry.setIndex(used);
+      this.depthSurfaces.set(key,geometry);
+    }
+    return this.depthSurfaces.get(key);
   }
 
   obj() {
@@ -241,5 +287,8 @@ export class BodyMesh {
     return lines.join('\n') + '\n';
   }
 
-  dispose() { this.geometry.dispose(); }
+  dispose() {
+    this.geometry.dispose();
+    for (const geometry of this.depthSurfaces.values()) geometry.dispose();
+  }
 }

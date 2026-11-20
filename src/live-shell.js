@@ -248,7 +248,7 @@ export function makeLiveShell(item, size, color) {
     [(measures.chest ?? 1020) * .001, (measures.waist ?? 940) * .001, (measures.hip ?? measures.chest ?? 1080) * .001];
   const circumference = t => t < .69 ? mix(metrics[0], metrics[1], ease((t - .38) / .31)) :
     mix(metrics[1], metrics[2], ease((t - .69) / .31));
-  function shapeTarget(volume, localArms, output, adjustment = {}) {
+  function shapeTarget(volume, localArms, output, adjustment = {}, skin) {
     const width = volume.width, len = volume.length, neck = volume.neck;
     const referenceCut = volume === reference.volume;
     const bodyStart = skirt ? len * .685 : dress ? len * .264 : -.050;
@@ -292,6 +292,8 @@ export function makeLiveShell(item, size, color) {
             const weight = ease((Math.abs(x) - neck.rx * 1.18) / (width * .22)) *
               ease((drop - .025) / .049) * (1 - ease((drop - .078) / .078));
             y += clamp(crestAt(ridge, x) - y + .0045, -.025, .068) * weight;
+            const rim = Math.abs(ridge.at(-1).x) - Math.abs(shoulder.x);
+            x += Math.sign(sa) * clamp(rim, 0, width * .079) * weight * Math.abs(sa) ** 2;
           }
         }
         const j = at(r, c) * 3;
@@ -316,12 +318,17 @@ export function makeLiveShell(item, size, color) {
       let normal = V(0, 0, 1);
       for (let r = 1; r <= cuffRows; r++) {
         const t = r / cuffRows;
-        const middle = curve.getPoint(t), { front, cross } = circleFrame(curve.getTangent(t), normal);
+        const frame = skin?.armFrame(j, t * (1 + trim / Math.max(.05,observed)));
+        const plane = frame ? { front:frame.front, cross:frame.side.clone().negate() } :
+          circleFrame(curve.getTangent(t), normal);
+        const { front, cross } = plane;
+        const middle = frame ? frame.center.clone().add(bias).lerp(socket,1-ease(t/.145)) : curve.getPoint(t);
         normal = front;
         const armRad = width * (coat ? .159 : knit ? .138 : .151) * circumferenceScale;
         const wristRad = width * .084 * circumferenceScale ** .56;
-        const radius = mix(armRad, wristRad, t ** 1.08);
-        const seamWeight = ease(t / .243);
+        const current = mix(armRad, wristRad, t ** 1.08);
+        const radius = frame ? Math.max(current, frame.radius + .010 + .004*Math.max(0,circumferenceScale-1)) : current;
+        const seamWeight = ease(t / (frame ? .171 : .243));
         for (let i = 0; i < n; i++) {
           const a = hole.vertices[i].angle;
           const bend = Math.exp(-(((t - .62) * 7) ** 2));
@@ -382,7 +389,7 @@ export function makeLiveShell(item, size, color) {
   }
   function update(volume, localArms, time, dt, wind, origin, options = {}) {
     if (!volume) return;
-    shapeTarget(volume, localArms, targets, options.adjustment);
+    shapeTarget(volume, localArms, targets, options.adjustment, options.skin);
     const result = solver.advance(targets, dt, options.collider, { gravity: options.gravity, quick: options.quick,
       settle: options.settle, wind });
     positions.array.set(result); positions.needsUpdate = true;

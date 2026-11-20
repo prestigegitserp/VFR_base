@@ -45,7 +45,7 @@ const state={
   body:get('profile'),preference:get('preference')??'regular',cart:get('cart')??[],filter:'all',records:new Map(),
   move:!reduce,wind:false,turn:0,zoom:1,high:false,mirror:true,occlusion:true,debug:false,split:0,splitAt:50,apply:false,
   coverage:'balanced',response:'steady',camera:'user',alignment:{full:emptyAlignment(),upper:emptyAlignment(),face:emptyAlignment()},
-  busy:false,ready:false,tracked:null,mask:null,headFrame:null,faceProbe:0,delegate:'',lastInfer:0,poseMs:0,maskMs:0,
+  busy:false,ready:false,tracked:null,mask:null,headFrame:null,faceProbe:0,delegate:'',lastInfer:0,poseMs:0,maskMs:0,framePeriod:0,
   light:.50,scan:null,issue:'',lens:63,inspection:null,orbit:0,orbitMode:'fit',shapeHistory:{},
   sync:'matched',capturedAt:0,paintedAt:0,
 };
@@ -249,7 +249,7 @@ $$('button[data-filter]').forEach((b)=>b.addEventListener('click',()=>{state.fil
 
 function resetVision() {
   state.ready=false;state.tracked=null;state.mask=null;
-  state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.delegate='';state.issue='';
+  state.lastInfer=0;state.poseMs=0;state.maskMs=0;state.framePeriod=0;state.delegate='';state.issue='';
   projection=null;headProjection=null;stable=null;state.headFrame=null;state.faceProbe=0;
   state.inspection=null;state.orbit=0;state.orbitMode='fit';state.shapeHistory={};
   state.capturedAt=state.paintedAt=0;
@@ -424,6 +424,10 @@ function applyTracking(result,at,matched=false){
   stage.dataset.landmarks=String((result.pose?.length??0)+(result.face?.length??0));
   const {pose,world,face,mask}=result;
   const live=state.source==='live';
+  if(live&&state.tracked?.at){
+    const period=clamp(at-state.tracked.at,33,2200);
+    state.framePeriod=state.framePeriod?state.framePeriod*.64+period*.36:period;
+  }
   const track=(filter,points)=>live&&points?filter.update(points,at,state.response):points;
   if(result.headAttempted)state.faceProbe=at;
   function keepCurrentAnchor(filtered,raw,anchor){
@@ -504,7 +508,9 @@ function fittedFrame(now){
   if(state.inspection)return state.inspection;
   if(state.scan)return {rig:null,mask:null,alpha:0,status:'none'};
   const age=now-(state.tracked?.at??0);
-  const maxAge=clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
+  const sync=state.sync==='matched';
+  const interval=Math.max(state.lastInfer, state.framePeriod);
+  const maxAge=sync?clamp(interval*1.9+195,360,2800):clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
   const live=state.source==='live';
   const found=live&&age>maxAge?null:project(now);
   if(found){
@@ -515,7 +521,8 @@ function fittedFrame(now){
   }
   if(live&&stable){
     const passed=now-stable.at;
-    const lifetime=state.tracked?.at===stable.at?maxAge+165:clamp(state.lastInfer+120,175,310)+140;
+    const lifetime=state.tracked?.at===stable.at?maxAge+165:
+      sync?clamp(interval*2+160,380,2000):clamp(state.lastInfer+120,175,310)+140;
     if(passed<lifetime)return {...stable,alpha:stable.alpha*clamp((lifetime-passed)/140,0,1),status:'hold'};
   }
   return {rig:null,mask:null,alpha:0,status:'none'};
@@ -905,6 +912,7 @@ $('scan-start').addEventListener('click',()=>{
   const heightMm=Math.round(v.valueAsNumber*10);
   $('fit-dialog').close();changeFrame('full');
   if(state.source!=='live'||!stream&&!state.busy)changeSource('live');
+  state.inspection=null;state.orbitMode='fit';state.split=0;renderKey=null;controls();
   state.scan={sensor:new TwoViewScan(heightMm),deadline:null};
   guide('برای نمای اول، تمام‌قد روبه‌رو بایست.');
 });

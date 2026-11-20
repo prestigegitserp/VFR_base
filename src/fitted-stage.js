@@ -112,6 +112,8 @@ export class FittedStage {
     this.bodyMeshes = [new BodyMesh(false), new BodyMesh(true)];
     this.skin = sphere(this.body, this.bodyMeshes[0].geometry, this.depth);
     this.skin.name = 'Reconstructed articulated body';
+    this.exposed = sphere(this.body, this.bodyMeshes[0].geometry, this.depth);
+    this.exposed.name = 'Exposed anatomy depth';
     this.wire = sphere(this.body, this.bodyMeshes[0].geometry, new T.MeshBasicMaterial({
       color: '#e7c9a4', wireframe: true, opacity: .27, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1,
     }));
@@ -188,7 +190,7 @@ export class FittedStage {
     this.overlay.position.set(0, 0, 0); this.overlay.quaternion.identity(); this.overlay.scale.setScalar(1);
 
     if (mode === 'face') {
-      this.skin.visible = false;
+      this.skin.visible = this.exposed.visible = false;
       this.activeBody = null;
       this.scannedMode = null;
       this.scannedStats = null;
@@ -196,7 +198,8 @@ export class FittedStage {
       if (poseChanged || adjustmentChanged) this.product?.fit(rig, adjustment);
     } else {
       const { volume } = rig;
-      this.skin.visible = true;
+      this.skin.visible = inspection;
+      this.exposed.visible = !inspection;
       const mesh = this.bodyMeshes[volume.mode === 'full' ? 1 : 0];
       const inv = rig.q.clone().invert();
       if (poseChanged || mesh !== this.activeBody) {
@@ -207,6 +210,11 @@ export class FittedStage {
         this.skin.geometry = this.wire.geometry = mesh.geometry;
         if (mesh !== this.activeBody) this.product?.reset?.();
         this.activeBody = mesh;
+      }
+      if (!inspection) {
+        const bareArms = this.item.cut === 'dress' || this.item.cut === 'skirt';
+        const visible = i => rig.hands.some(hand=>hand.side===i && hand.front > .09);
+        this.exposed.geometry = mesh.depthSurface(bareArms,visible(0),visible(1));
       }
       if (poseChanged || viewChanged) {
         this.maskHead(rig.head);
@@ -229,7 +237,7 @@ export class FittedStage {
         const elapsed = this.fitAt ? clamp((time - this.fitAt) * .001, dt, .047) : dt;
         this.fitAt = time;
         this.product.update(volume, this.localArms, time, elapsed, breeze, rig.origin,
-          { collider: mesh.collider, adjustment, gravity, quick, settle: adjustmentChanged });
+          { collider: mesh.collider, skin:mesh, adjustment, gravity, quick, settle: adjustmentChanged });
       } else if (scanned?.fitSurface) {
         if (poseChanged || adjustmentChanged || !scanned.surfaceStats) scanned.fitSurface(volume, this.localArms, mesh.collider, adjustment);
         this.scannedStats = scanned.surfaceStats;

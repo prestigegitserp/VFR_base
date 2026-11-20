@@ -181,6 +181,11 @@ test('the exported body has a closed, oriented skin with welded torso, arms and 
     const obj = body.obj();
     assert.equal((obj.match(/^v /gm) ?? []).length, visited.size);
     assert.equal((obj.match(/^f /gm) ?? []).length, index.length / 3);
+    const covered = body.depthSurface(false,false,false);
+    const exposed = body.depthSurface(true,true,true);
+    assert.equal(covered.attributes.position,body.geometry.attributes.position);
+    assert.ok(covered.index.count < index.length*.22);
+    assert.ok(exposed.index.count > covered.index.count);
     body.dispose();
   }
 });
@@ -214,7 +219,7 @@ test('body contact resolves penetration of a fitted garment and size changes ret
   const sizes = [small,large].map(size=>makeLiveShell(item,size,0));
   const circumference = [];
   for (const cloth of sizes) {
-    cloth.update(rig.volume,arms,0,1/30,false,rig.origin,{ quick:true, collider:body.collider });
+    cloth.update(rig.volume,arms,0,1/30,false,rig.origin,{ quick:true, collider:body.collider, skin:body });
     const index = new Set(cloth.shell.geometry.index.array);
     const vertices = cloth.shell.geometry.attributes.position;
     const inside = [...index].map(i=>body.collider.distance(vertices.getX(i),vertices.getY(i),vertices.getZ(i)))
@@ -232,4 +237,33 @@ test('body contact resolves penetration of a fitted garment and size changes ret
   }
   assert.ok(circumference[1]-circumference[0]>.040,JSON.stringify(circumference));
   body.dispose();
+});
+
+test('calibration collects frontal width and profile depth from actual silhouette rows', () => {
+  const scanner = new TwoViewScan(1740), aspect = 200/240;
+  const sample = side => {
+    const w=200, h=240, data=new Uint8Array(w*h);
+    for (let y=20;y<=219;y++) {
+      const half=y<49?16:side?23:35;
+      data.fill(4,y*w+100-half,y*w+100+half+1);
+    }
+    const points=Array.from({length:33},()=>({x:.5,y:.4,z:0,visibility:0}));
+    const s=side?.044:.109, depth=side?.080:.006;
+    for (const [id,x,y,z] of [[0,.5,.17,0],[11,.5-s,.244,depth],[12,.5+s,.245,-depth],
+      [23,.437,.557,.034],[24,.563,.557,-.031],[29,.46,.895,0],[30,.54,.898,0]]) {
+      points[id]={x,y,z,visibility:.99};
+    }
+    return {points,mask:{w,h,data}};
+  };
+  const front=sample(false), side=sample(true);
+  assert.equal(scanner.ingest(side.points,side.mask,aspect),false);
+  for(let i=0;i<8;i++) assert.equal(scanner.ingest(front.points,front.mask,aspect),true);
+  assert.equal(scanner.view,'turn');
+  scanner.view='side';
+  assert.equal(scanner.ingest(front.points,front.mask,aspect),false);
+  for(let i=0;i<8;i++) assert.equal(scanner.ingest(side.points,side.mask,aspect),true);
+  const body=scanner.result();
+  assert.equal(body.shape.sections.length,10);
+  assert.ok(body.shape.sections.every(s=>s.rx>.30/2 && s.rz>.16/2 && s.rz<s.rx*.76));
+  assert.ok(body.shape.length>.35 && body.shape.length<.72);
 });

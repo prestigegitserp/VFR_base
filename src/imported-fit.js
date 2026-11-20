@@ -1,4 +1,4 @@
-import { Group, Mesh, Quaternion, Vector3 } from 'three';
+import { BufferAttribute, Group, Mesh, Quaternion, Vector3 } from 'three';
 import { clamp } from './catalog.js';
 import { bodyRing } from './body-volume.js';
 
@@ -22,7 +22,13 @@ export function prepareImportedFit(source, studioOnly, anchors) {
     mesh.name = m.name;
     mesh.frustumCulled = false;
     group.add(mesh);
-    const attr = mesh.geometry.attributes.position, rest = Float32Array.from(attr.array);
+    const src = mesh.geometry.attributes.position;
+    const rest = new Float32Array(src.count * 3);
+    for (let i=0;i<src.count;i++) {
+      rest[i*3]=src.getX(i);rest[i*3+1]=src.getY(i);rest[i*3+2]=src.getZ(i);
+    }
+    const attr = new BufferAttribute(rest.slice(),3);
+    mesh.geometry.setAttribute('position',attr);
     const centerX = rest.reduce((sum, value, i) => i % 3 === 0 ? sum + value : sum, 0) / attr.count;
     const arm = armPart.test(m.name) && Math.abs(centerX) > anchors.span * .33 ? (centerX >= 0 ? 1 : 0) : null;
     return { mesh, attr, rest, arm };
