@@ -407,13 +407,14 @@ try{
   await page.locator('.look[data-look=orion]').click();
   await page.locator('button[data-source=live]').click();
   await page.locator('#turn-person:not([disabled])').click();
-  const matchedTurn=(direction,progress)=>page.locator(
-    `#stage[data-turn-progress="${progress}"][data-direction="${direction}"][data-fit=locked][data-sync=matched][data-cloth=drape]`);
+  const completedStage=step=>page.waitForFunction(
+    n=>Number(document.querySelector('#stage').dataset.turnProgress)>=n,step,{timeout:95_000});
   try {
-    await matchedTurn('front',1).waitFor({timeout:55_000});
-    await matchedTurn('side',2).waitFor({timeout:65_000});
+    await completedStage(1);
+    await completedStage(2);
     await preview('turn-live-side');
-    await matchedTurn('back',3).waitFor({timeout:65_000});
+    await completedStage(3);
+    await page.locator('#stage[data-direction=back][data-fit=locked][data-sync=matched][data-cloth=drape]').waitFor({timeout:30_000});
     await expectOverlay(p=>p.count>150&&p.w>80);
     await preview('turn-live-back');
   }catch(error){

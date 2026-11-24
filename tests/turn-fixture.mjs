@@ -11,11 +11,11 @@ function clip(source, output, start, end, stretch, hold=0) {
 }
 const stages = [
   '[0:v]scale=360:640,setsar=1,split=5[a][b][c][d][e]',
-  clip('a','front',79,80,1,17),
+  clip('a','front',79,80,1,29),
   clip('b','profileIn',80,86,13),
-  clip('c','profile',86,87,1,9),
+  clip('c','profile',86,87,1,17),
   clip('d','rearIn',87,92,13),
-  clip('e','rear',92,93,1,14),
+  clip('e','rear',92,93,1,19),
   '[front][profileIn][profile][rearIn][rear]concat=n=5:v=1:a=0[out]',
 ];
 execFileSync(process.env.VFR_FFMPEG || 'ffmpeg',['-nostdin','-hide_banner','-loglevel','error','-y','-i',source,
