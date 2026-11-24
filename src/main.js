@@ -830,6 +830,7 @@ $('view-volume').addEventListener('click',()=>{
 });
 function refreshAngle(){
   const angle=angleNow();
+  if(orbitVisible())stage.dataset.requestedAngle=String(angle);else delete stage.dataset.requestedAngle;
   $('orbit-angle').value=String(angle);$('orbit-value').textContent=show(angle)+'°';
   const preset=Math.abs(angle)<2?0:Math.abs(angle)>177?180:Math.abs(Math.abs(angle)-90)<2?90:null;
   for(const button of $$('[data-angle]'))press(button,Number(button.dataset.angle)===preset);

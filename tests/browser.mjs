@@ -80,8 +80,12 @@ try{
   }
   if(process.env.VFR_BROWSER_SHOTS)await page.screenshot({path:'.render/pro-mannequin-rear.jpg',type:'jpeg',quality:90});
   await page.locator('#play-turn').click();
-  await page.locator('#stage[data-angle="180"]').waitFor({timeout:30_000});
-  assert.equal(await page.locator('#play-turn').getAttribute('aria-pressed'),'false');
+  await page.locator('#play-turn[aria-pressed="true"]').waitFor();
+  await page.waitForFunction(()=>{
+    const stage=document.querySelector('#stage');
+    return stage.dataset.angle==='180'&&stage.dataset.requestedAngle==='180'&&
+      document.querySelector('#play-turn').getAttribute('aria-pressed')==='false';
+  },{},{timeout:30_000});
   await page.locator('[data-angle="0"]').click();
   console.log('OK: mannequin front, profile, and rear pixels, automatic half-turn, and refined garment',mannequinTriangles);
   await page.locator('#wind').click();
