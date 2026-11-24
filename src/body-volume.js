@@ -159,7 +159,8 @@ export function solveBody(input, mode, camera, head, profile) {
   let strong=points.map(p=>visible(p,.48,.085));
   const supported=points.map(p=>visible(p,shapeHistory?.heading?.reliability>.43?.095:.23,.16));
   const history=shapeHistory;
-  const heading=solveHeading(input.headingPose??pose,input.headingWorld??world,face,history,at);
+  const heading=solveHeading(input.headingPose??pose,input.headingWorld??world,face,history,at,input.expectingBack);
+  if(heading?.source==='rejected-flip')return null;
   const partial=heading&&strong.some(Boolean)&&supported.every(Boolean);
   const poseStable=strong.every(Boolean);
   const estimated=!poseStable&&!partial;

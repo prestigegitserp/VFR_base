@@ -368,3 +368,13 @@ test('a distinct rear silhouette recovers cropped shoulders and rejects visible 
   assert.equal(solveBody({mask,headChecked:true},'upper',camera,null),null);
   assert.equal(solveBody({mask:{w,h,data:new Uint8Array(w*h)},headChecked:true},'upper',camera,null),null);
 });
+
+
+test('the guided rear phase keeps the last valid fit when a face-free sample flips front',()=>{
+  const shapeHistory={};
+  const side=turningSubject(-Math.PI*.50);
+  assert.equal(solveBody({...side,shapeHistory,at:1000},'upper',camera,null)?.view,'side');
+  const flipped=turningSubject(-.22);
+  assert.equal(solveBody({...flipped,shapeHistory,at:1600,expectingBack:true},'upper',camera,null),null);
+  assert.equal(solveBody({...turningSubject(-3),shapeHistory,at:2400,expectingBack:true},'upper',camera,null)?.view,'back');
+});

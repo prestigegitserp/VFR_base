@@ -27,7 +27,7 @@ export function bodyView(angle) {
   return a < .67 ? 'front' : a > 2.47 ? 'back' : 'side';
 }
 
-export function solveHeading(pose, world, face, history, time = 0) {
+export function solveHeading(pose, world, face, history, time=0, expectingBack=false) {
   const suggestions = [...axisSignals(world,'metric',pose), ...axisSignals(pose,'image')];
   const previous = history?.heading;
   const elapsed = previous && time > previous.time ? clamp((time-previous.time)*.001, .016, .66) : .094;
@@ -55,6 +55,10 @@ export function solveHeading(pose, world, face, history, time = 0) {
     x+=Math.cos(a)*vote.weight; z+=Math.sin(a)*vote.weight; mass+=vote.weight;
   }
   const observed=Math.atan2(z,x);
+  if(expectingBack&&!reliableFace&&previous&&time-previous.time<6900&&
+      bodyView(previous.angle)!=='front'&&bodyView(observed)==='front'){
+    return {angle:previous.angle,source:'rejected-flip',reliability:.35,time};
+  }
   const agreement=Math.hypot(x,z)/Math.max(.001,mass);
   const reliability=clamp(agreement*(.38+.37*mass),0,1);
   let angle=observed, velocity=0;

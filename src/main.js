@@ -512,7 +512,7 @@ function project(now=performance.now()) {
   if(headProjection?.face!==tracked.face||headProjection?.bounds!==bounds||headProjection?.lens!==state.lens||headProjection?.eye!==eye){
     headProjection={face:tracked.face,bounds,lens:state.lens,eye,rig:solveHead(tracked.face,camera,eye)};
   }
-  const rig=state.mode==='face'?headProjection.rig:solveBody({...tracked,mask,maskShift:usable?.shift,shapeHistory:state.source==='live'?state.shapeHistory:null},state.mode,camera,headProjection.rig,state.body);
+  const rig=state.mode==='face'?headProjection.rig:solveBody({...tracked,mask,maskShift:usable?.shift,shapeHistory:state.source==='live'?state.shapeHistory:null,expectingBack:state.turnGuide?.index===2},state.mode,camera,headProjection.rig,state.body);
   if(rig&&usable)rig.maskShift=usable.shift;
   projection={tracked,mask,bounds,lens:state.lens,body:state.body,rig};
   rigRevision++;
