@@ -28,6 +28,14 @@ jobs:
       - run: npm run stage:models
       - run: npm run build
       - run: npx playwright install --only-shell chromium
+      - name: Prepare FFmpeg for the recorded-camera fixture
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            mkdir -p .render/ffmpeg
+            package="$(npm pack --ignore-scripts --silent --pack-destination .render/ffmpeg @ffmpeg-installer/linux-x64@4.1.0)"
+            tar -xzf ".render/ffmpeg/$package" -C .render/ffmpeg --strip-components=1 package/ffmpeg
+            echo "VFR_FFMPEG=$GITHUB_WORKSPACE/.render/ffmpeg/ffmpeg" >> "$GITHUB_ENV"
+          fi
       - name: Test 180-degree views, rear fitting, fabric contact and moving camera
         env:
           VFR_BROWSER_SHOTS: '1'

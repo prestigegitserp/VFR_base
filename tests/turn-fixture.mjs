@@ -18,6 +18,6 @@ const stages = [
   clip('e','rear',92,93,1,14),
   '[front][profileIn][profile][rearIn][rear]concat=n=5:v=1:a=0[out]',
 ];
-execFileSync('ffmpeg',['-nostdin','-hide_banner','-loglevel','error','-y','-i',source,
+execFileSync(process.env.VFR_FFMPEG || 'ffmpeg',['-nostdin','-hide_banner','-loglevel','error','-y','-i',source,
   '-filter_complex',stages.join(';'),'-map','[out]','-pix_fmt','yuv420p','-f','yuv4mpegpipe',destination],
   {stdio:'inherit'});
