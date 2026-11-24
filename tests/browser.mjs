@@ -6,9 +6,9 @@ import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import jpeg from 'jpeg-js';
 
-const [photo, portrait, video, rear] = process.argv.slice(2).map(resolvePath);
+const [photo, portrait, video, rear, turn] = process.argv.slice(2).map(resolvePath);
 function resolvePath(x){return resolve(x);}
-if(!photo||!portrait||!video||!rear)throw new Error('Pass a full pose photo, a portrait, a Y4M video and a rear photo.');
+if(!photo||!portrait||!video||!rear||!turn)throw new Error('Pass a full pose photo, a portrait, a Y4M video, a rear photo and a Y4M half-turn.');
 async function crop(file,name,u,v,w,h){
   const dest=resolve('.render/'+name+'.jpg');
   const pixels=jpeg.decode(await readFile(file),{useTArray:true});
@@ -167,7 +167,12 @@ try{
     const report=await capturedReport;
     assert.equal(report.suggestedFilename(),'VFR-v7-diagnostics.json');
     const diag=JSON.parse(await readFile(await report.path(),'utf8'));
-    assert.ok(!JSON.stringify(diag).includes('landmarks') && !('photo' in diag));
+    const sensitiveKeys=new Set(['landmarks','pose','world','face','pixels','frameData','photo','image','obj']);
+    const scalarKeys=JSON.stringify(diag,(key,value)=>{
+      assert.ok(!sensitiveKeys.has(key),'Unexpected source data in the diagnostic report: '+key);
+      return value;
+    });
+    assert.ok(!scalarKeys.includes('data:image/'));
     await page.locator('#inspect').click();
     return diag;
   }
@@ -263,7 +268,7 @@ try{
   await page.locator('#stage[data-view=image]').waitFor();
   console.log('OK: cropped torso, changing 3D viewpoints, body OBJ and cloth strain inspection',changed);
   await page.locator('#photo-file').setInputFiles(rear);
-  await expectSignal('پرو روی عکس');
+  await expectSignal('پرو روی عکس',40_000);
   await page.locator('#stage[data-direction=back][data-depth=body][data-garment-mesh]').waitFor({timeout:30000});
   await expectOverlay(p=>p.count>190&&p.w>90);
   const backReport=await openDiagnostics();
@@ -392,4 +397,36 @@ try{
   assert.equal(await page.locator('#video').evaluate(v=>!!v.srcObject),false);
   assert.deepEqual(errors,[]);
   console.log('OK: near webcam body and mirrored optics on the same moving stream',nearLive,lensLive);
+
+  await instance.close();
+  instance=await launch(turn);
+  page=await desktop(instance);
+  await page.goto(url);
+  await page.locator('#stage[data-renderer=webgl]').waitFor();
+  await page.locator('button[data-frame=upper]').click();
+  await page.locator('.look[data-look=orion]').click();
+  await page.locator('button[data-source=live]').click();
+  await page.locator('#turn-person:not([disabled])').click();
+  const matchedTurn=(direction,progress)=>page.locator(
+    `#stage[data-turn-progress="${progress}"][data-direction="${direction}"][data-fit=locked][data-sync=matched][data-cloth=drape]`);
+  try {
+    await matchedTurn('front',1).waitFor({timeout:55_000});
+    await matchedTurn('side',2).waitFor({timeout:65_000});
+    await preview('turn-live-side');
+    await matchedTurn('back',3).waitFor({timeout:65_000});
+    await expectOverlay(p=>p.count>150&&p.w>80);
+    await preview('turn-live-back');
+  }catch(error){
+    await preview('turn-live-blocked');
+    const snapshot=await page.locator('#stage').evaluate(stage=>({
+      ...stage.dataset,guide:stage.querySelector('#guidance-text').textContent,
+      time:stage.querySelector('video').currentTime,title:stage.querySelector('#state-label').textContent,
+    }));
+    throw new Error('Guided half-turn: '+JSON.stringify(snapshot),{cause:error});
+  }
+  const turnReport=await openDiagnostics();
+  assert.deepEqual(turnReport.measuredTurn.map(sample=>sample.view),['front','side','back']);
+  assert.ok(turnReport.measuredTurn[2].degrees>=147,JSON.stringify(turnReport.measuredTurn));
+  assert.deepEqual(errors,[]);
+  console.log('OK: a real video replay completes guided front, profile and back fitting',turnReport.measuredTurn);
 }finally{await instance?.close();server.close();}

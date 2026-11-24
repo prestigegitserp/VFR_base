@@ -351,3 +351,20 @@ test('a rear photo starts with the correct side of the shell without a prior fro
   assert.ok(sample.testedFaces>4_800&&sample.testedVertices>2_000);
   stage.clear();
 });
+
+test('a distinct rear silhouette recovers cropped shoulders and rejects visible faces and an empty mask',()=>{
+  const w=154,h=256, data=new Uint8Array(w*h), mask={w,h,data};
+  for(let y=19;y<252;y++){
+    const half=y<64?18:Math.min(55,18+(y-64)*1.44);
+    data.fill(y<60?5:4,y*w+Math.round(77-half),y*w+Math.round(77+half));
+  }
+  const rig=solveBody({mask,headChecked:true},'upper',camera,null);
+  assert.equal(rig?.kind,'estimate');
+  assert.equal(rig?.view,'back');
+  assert.equal(rig.headingSource,'rear-silhouette');
+  assert.equal(rig.anchors.filter(Boolean).length,0);
+  assert.ok(rig.volume.rings.every(x=>x.rx>.06));
+  for(let y=24;y<57;y++)data.fill(3,y*w+60,y*w+93);
+  assert.equal(solveBody({mask,headChecked:true},'upper',camera,null),null);
+  assert.equal(solveBody({mask:{w,h,data:new Uint8Array(w*h)},headChecked:true},'upper',camera,null),null);
+});

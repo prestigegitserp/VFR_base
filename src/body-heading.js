@@ -3,7 +3,6 @@ import { clamp } from './catalog.js';
 // In a frontal camera image the wearer's right (12) is on the left of the image.
 export const anatomy = [[12, 14, 16, 20, 24, 26, 28], [11, 13, 15, 19, 23, 25, 27]];
 const pairs = [[12, 11, 1], [24, 23, .71]];
-const tau = Math.PI * 2;
 export const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
 const conf = p => p?.visibility ?? (p ? 1 : 0);
 const valid = p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
@@ -39,10 +38,13 @@ export function solveHeading(pose, world, face, history, time = 0) {
   }
   const image = suggestions.find(p=>p.type==='image');
   const reliableFace = Boolean(face?.[33] && face?.[263] && Math.abs(face[33].x-face[263].x)>.018);
-  // Competing opposite-side hypotheses are resolved with the observed silhouette axis and temporal continuity.
+  // A brief left/right swap is common after a profile. Preserve the previous rear hypothesis
+  // when landmarks abruptly label a frontal body but the detector has no face evidence.
+  const fresh=previous&&time-previous.time<3600;
+  const ambiguousFlip=fresh&&image&&!reliableFace&&bodyView(previous.angle)==='back'&&bodyView(image.a)==='front';
   const around = point => {
     const opposite = point.a + Math.PI;
-    const ref = image && Math.abs(Math.cos(image.a))>.68 && image.weight>.32 ? image.a : prediction;
+    const ref = !ambiguousFlip&&image&&Math.abs(Math.cos(image.a))>.68&&image.weight>.32 ? image.a : prediction;
     if (ref==null || Math.abs(wrap(point.a-ref))<Math.PI*.59) return point.a;
     if (point===image && point.weight>.45 && reliableFace) return point.a;
     return opposite;
@@ -70,16 +72,15 @@ export function solveHeading(pose, world, face, history, time = 0) {
 }
 
 export class TurnSequence {
-  constructor() { this.index=0; this.samples=[]; this.hold=0; this.last=null; this.direction=0; }
+  constructor() { this.index=0; this.samples=[]; this.hold=0; this.last=null; }
 
   ingest(rig, time) {
     if (!rig || this.index>=3 || this.last===time || rig.headingReliability<.46) return;
     this.last=time;
     const a=Math.abs(wrap(rig.yaw));
-    const inZone=this.index===0 ? a<.38 : this.index===1 ? a>1.13&&a<1.99 : a>2.66;
-    if (!inZone || this.index===2 && Math.sign(rig.yaw)!==this.direction && a<3.02) { this.hold=0; return; }
+    const inZone=this.index===0 ? a<.41 : this.index===1 ? a>1.13&&a<2.01 : a>2.56;
+    if(!inZone){this.hold=0;return;}
     if (++this.hold<2) return;
-    if (this.index===1) this.direction=Math.sign(rig.yaw);
     this.samples.push({view:['front','side','back'][this.index],degrees:Math.round(a*180/Math.PI),reliability:Math.round(rig.headingReliability*100)});
     this.hold=0;
     this.index++;

@@ -36,8 +36,10 @@ jobs:
           curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/pose.jpg -o .render/pose.jpg
           curl -fLsS --retry 2 https://storage.googleapis.com/mediapipe-assets/portrait.jpg -o .render/portrait.jpg
           curl -fLsS --retry 2 'https://upload.wikimedia.org/wikipedia/commons/9/94/Back_View_of_the_SeV_Expedition_Scottevest.jpg' -o .render/rear.jpg
+          curl -fLsS --retry 2 'https://videos.pexels.com/video-files/4725507/4725507-hd_1080_1920_25fps.mp4' -o .render/turn.mp4
+          node tests/turn-fixture.mjs .render/turn.mp4 .render/turn-camera.y4m
           node tests/y4m-fixture.mjs .render/pose.jpg .render/camera.y4m
-          node tests/browser.mjs .render/pose.jpg .render/portrait.jpg .render/camera.y4m .render/rear.jpg
+          node tests/browser.mjs .render/pose.jpg .render/portrait.jpg .render/camera.y4m .render/rear.jpg .render/turn-camera.y4m
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -53,9 +55,12 @@ jobs:
             .render/pro-mannequin-rear.jpg
             .render/pro-rear-photo.jpg
             .render/pro-person-rear.jpg
+            .render/pro-turn-live-side.jpg
+            .render/pro-turn-live-back.jpg
+            .render/pro-turn-live-blocked.jpg
             .render/pro-glasses.jpg
             .render/pro-near-live.jpg
             .render/pro-glasses-live.jpg
             .render/pro-near-blocked.jpg
-          retention-days: 3
+          retention-days: 30
           if-no-files-found: ignore

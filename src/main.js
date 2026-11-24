@@ -439,7 +439,7 @@ function applyTracking(result,at,matched=false){
   const {pose,world,face,mask}=result;
   const live=state.source==='live';
   if(live&&state.tracked?.at){
-    const period=clamp(at-state.tracked.at,33,2200);
+    const period=clamp(at-state.tracked.at,33,5200);
     state.framePeriod=state.framePeriod?state.framePeriod*.64+period*.36:period;
   }
   const track=(filter,points)=>live&&points?filter.update(points,at,state.response):points;
@@ -466,7 +466,7 @@ function applyTracking(result,at,matched=false){
     const dy=(pose[11].y+pose[12].y-body[11].y-body[12].y)*.5;
     body=body.map(p=>({...p,x:p.x+dx,y:p.y+dy}));
   }
-  state.tracked={pose:body,world:track(smoothWorld,world),face:head,at};
+  state.tracked={pose:body,world:track(smoothWorld,world),face:head,headChecked:result.headAttempted,headingPose:pose,headingWorld:world,at};
   if(mask){
     stage.dataset.mask='ready';
     state.mask={frame:subjectMask(mask,pose,face),at,anchor:trackingCenter(pose,face)};
@@ -494,7 +494,8 @@ function trackingCenter(pose,face){
 function currentMask(now){
   const snapshot=state.mask;
   if(!snapshot)return null;
-  if(state.source==='live'&&now-snapshot.at>clamp(state.lastInfer*2.6+190,335,670))return null;
+  const paired=state.sync==='matched'&&snapshot.at===state.tracked?.at;
+  if(!paired&&state.source==='live'&&now-snapshot.at>clamp(state.lastInfer*2.6+190,335,1000))return null;
   const center=trackingCenter(state.tracked?.pose,state.tracked?.face);
   const anchor=snapshot.anchor;
   const shift=center&&anchor?{x:center.x-anchor.x,y:center.y-anchor.y}:{x:0,y:0};
@@ -524,7 +525,7 @@ function fittedFrame(now){
   const age=now-(state.tracked?.at??0);
   const sync=state.sync==='matched';
   const interval=Math.max(state.lastInfer, state.framePeriod);
-  const maxAge=sync?clamp(interval*1.9+195,360,2800):clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
+  const maxAge=sync?clamp(interval*1.75+210,410,4900):clamp(state.poseMs*2.20+state.maskMs*.43+110,255,755);
   const live=state.source==='live';
   const found=live&&age>maxAge?null:project(now);
   if(found){
@@ -536,7 +537,7 @@ function fittedFrame(now){
   if(live&&stable){
     const passed=now-stable.at;
     const lifetime=state.tracked?.at===stable.at?maxAge+165:
-      sync?clamp(interval*2+160,380,2000):clamp(state.lastInfer+120,175,310)+140;
+      sync?clamp(interval*1.72+160,380,4700):clamp(state.lastInfer+120,175,310)+140;
     if(passed<lifetime)return {...stable,alpha:stable.alpha*clamp((lifetime-passed)/140,0,1),status:'hold'};
   }
   return {rig:null,mask:null,alpha:0,status:'none'};
@@ -650,7 +651,7 @@ function diagnostics(now,result){
   recentStats={version:7,source:state.source,frame:state.mode,status:result.status,
     anchor:rig?.kind??null,trackingScore:rig?Math.round(rig.quality*100):null,
     direction:rig?.view??null,headingSource:rig?.headingSource??null,headingConfidence:rig?.headingReliability??null,
-    shoulderErrorPx:rig?.shoulderError??null,shouldersObserved:rig?.anchors??null,roiRecovery:state.recovery,
+    shoulderErrorPx:rig?.shoulderError??null,shouldersObserved:rig?.anchors??null,shoulderOrderCorrected:rig?.swapped??null,roiRecovery:state.recovery,
     measuredTurn:state.turnGuide?.samples??[],viewAngle:orbitVisible()?angleNow():null,
     yaw:rig?Math.round(rig.yaw*180/Math.PI):null,arms:rig?.armQuality?.map(x=>x>=.55?'tracked':'estimated')??null,
     mask:!!result.mask,maskAgeMs:result.mask&&state.source==='live'?ms(now-state.mask?.at):null,
